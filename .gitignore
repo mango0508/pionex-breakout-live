@@ -1,0 +1,21 @@
+# 機密：絕不可提交至 GitHub
+.env
+.env.*
+!.env.example
+
+# 執行期資料：可能含帳戶與交易資訊
+pionex_live_state.json
+pionex_live_state.tmp
+pionex_live_events.csv
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 作業系統與編輯器
+.DS_Store
+.vscode/
