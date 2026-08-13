@@ -338,19 +338,45 @@ class PionexClient:
         ).get("data", {})
         symbols = data.get("symbols", [])
         allowed: dict[str, dict[str, Any]] = {}
+        parsed_items = 0
+        trading_items = 0
+        usdt_items = 0
+        perp_items = 0
+
         for item in symbols:
             if not isinstance(item, dict):
                 continue
-            symbol = str(item.get("symbol", ""))
+            parsed_items += 1
+            symbol = str(item.get("symbol", "")).upper()
+            status = str(item.get("status", "")).upper()
+            quote_currency = str(item.get("quoteCurrency", "")).upper()
+            # 派網公開端點目前回傳 type=PERP；部分文件／舊版格式則使用
+            # contractType=PERPETUAL，因此兩者都接受，但仍要求正式的 _PERP 後綴。
+            contract_type = str(item.get("contractType", "")).upper()
+            api_type = str(item.get("type", "")).upper()
+            is_perpetual = contract_type == "PERPETUAL" or api_type == "PERP"
+
+            if status == "TRADING":
+                trading_items += 1
+            if quote_currency == "USDT":
+                usdt_items += 1
+            if is_perpetual:
+                perp_items += 1
             if (
                 symbol
-                and item.get("status") == "TRADING"
-                and item.get("contractType") == "PERPETUAL"
-                and item.get("quoteCurrency") == "USDT"
+                and status == "TRADING"
+                and quote_currency == "USDT"
+                and is_perpetual
+                and symbol.endswith("_USDT_PERP")
             ):
                 allowed[symbol] = item
+
         if not allowed:
-            raise PionexAPIError("派網未回傳任何可交易 USDT 永續合約。")
+            raise PionexAPIError(
+                "派網未回傳任何可交易 USDT 永續合約。"
+                f"診斷：原始筆數={len(symbols)}、可解析={parsed_items}、"
+                f"TRADING={trading_items}、USDT={usdt_items}、PERP={perp_items}。"
+            )
         return allowed
 
     def top_tradable_usdt_perps(self, top_n: int) -> list[tuple[str, dict[str, Any], Decimal]]:

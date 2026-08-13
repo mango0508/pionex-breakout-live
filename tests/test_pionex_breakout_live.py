@@ -90,6 +90,41 @@ class APIParsingAndScanningTests(unittest.TestCase):
         self.assertEqual([item[0] for item in ranked], ["BTC_USDT_PERP", "ETH_USDT_PERP"])
         self.assertEqual([item[2] for item in ranked], [Decimal("500"), Decimal("200")])
 
+    def test_symbol_filter_accepts_observed_type_perp_shape(self) -> None:
+        client = bot.PionexClient("", "")
+        client.public_get = lambda _path, _params=None: {
+            "data": {
+                "symbols": [
+                    {
+                        "symbol": "BTC_USDT_PERP",
+                        "status": "TRADING",
+                        "quoteCurrency": "USDT",
+                        "type": "PERP",
+                    },
+                    {
+                        "symbol": "ETH_USDT_PERP",
+                        "status": "TRADING",
+                        "quoteCurrency": "USDT",
+                        "contractType": "PERPETUAL",
+                    },
+                    {
+                        "symbol": "BTC_USDC_PERP",
+                        "status": "TRADING",
+                        "quoteCurrency": "USDC",
+                        "type": "PERP",
+                    },
+                    {
+                        "symbol": "BTC_USDT_PERP",
+                        "status": "PAUSED",
+                        "quoteCurrency": "USDT",
+                        "type": "PERP",
+                    },
+                ]
+            }
+        }
+        allowed = client.tradable_usdt_perp_symbols()
+        self.assertEqual(set(allowed), {"BTC_USDT_PERP", "ETH_USDT_PERP"})
+
 
 class SignalTests(unittest.TestCase):
     @staticmethod
