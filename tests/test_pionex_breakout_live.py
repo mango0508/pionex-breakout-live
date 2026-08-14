@@ -90,6 +90,27 @@ class APIParsingAndScanningTests(unittest.TestCase):
         self.assertEqual(context["required_permission"], "Enable reading")
         self.assertEqual(context["required_for_order"], "Enable trading")
 
+    def test_leverage_trade_type_denied_blocks_entry_with_whitelist_context(self) -> None:
+        class TradeTypeDeniedClient:
+            @staticmethod
+            def leverage(_symbol: str) -> Decimal:
+                raise bot.PionexAPIError(
+                    "派網 API 失敗（HTTP 200）：TRADE_TYPE_DENIED user denied not in whitelist"
+                )
+
+        with patch.object(bot, "log_event") as log_event:
+            allowed = bot.symbol_leverage_matches(TradeTypeDeniedClient(), "BTC_USDT_PERP")
+
+        self.assertFalse(allowed)
+        log_event.assert_called_once()
+        args, context = log_event.call_args
+        self.assertEqual(args[0], "ENTRY_BLOCKED")
+        self.assertIn("TRADE_TYPE_DENIED", args[1])
+        self.assertEqual(args[2], "BTC_USDT_PERP")
+        self.assertEqual(context["endpoint"], "GET /uapi/v1/account/leverage")
+        self.assertEqual(context["exchange_code"], "TRADE_TYPE_DENIED")
+        self.assertEqual(context["blocked_product"], "USDT 永續合約（Futures／Perpetual）")
+
     def test_scan_keeps_only_tradable_usdt_perps_and_ranks_by_amount(self) -> None:
         client = bot.PionexClient("", "")
         client.tradable_usdt_perp_symbols = lambda: {

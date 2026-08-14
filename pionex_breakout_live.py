@@ -949,7 +949,24 @@ def symbol_leverage_matches(client: PionexClient, symbol: str) -> bool:
     try:
         current = client.leverage(symbol)
     except PionexAPIError as exc:
-        if "AUTH_UNAVAILABLE" not in str(exc):
+        error_text = str(exc)
+        if "TRADE_TYPE_DENIED" in error_text:
+            # 此拒絕出現在讀取槓桿之前；未能驗證 5x 時絕不能送單或假設權限已開通。
+            log_event(
+                "ENTRY_BLOCKED",
+                "派網拒絕此 API Key 存取 USDT 永續合約（TRADE_TYPE_DENIED / not in whitelist）；"
+                "未送出訂單。一般 API Key 編輯頁未提供此交易類型切換，請聯絡派網客服，"
+                "要求確認此 API Key 的 USDT 永續合約（Futures／Perpetual）API 交易類型白名單／產品授權。"
+                "不要傳送 API Key、Secret 或任何權杖給客服以外的第三方。",
+                symbol,
+                endpoint="GET /uapi/v1/account/leverage",
+                exchange_code="TRADE_TYPE_DENIED",
+                exchange_message="user denied not in whitelist",
+                blocked_product="USDT 永續合約（Futures／Perpetual）",
+                configured_leverage=decimal_string(LEVERAGE),
+            )
+            return False
+        if "AUTH_UNAVAILABLE" not in error_text:
             raise
         # 絕不可在無法讀回交易所槓桿時，假設使用者已手動設為 5x 後繞過檢查。
         # 官方文件將此 GET 端點列為 Enable reading；真正送單另需要 Enable trading。
