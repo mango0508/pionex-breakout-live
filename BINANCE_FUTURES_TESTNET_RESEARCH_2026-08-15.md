@@ -22,9 +22,9 @@ Futures Demo Trading 不支援 Webhook、Grid、TWAP 等部分功能，這與本
 
 ## API 文件確認
 
-USDⓈ-M Futures REST API 的交易文件頁列出真實 base URL `https://fapi.binance.com` 與 Testnet base URL `https://testnet.binancefuture.com`。交易與帳戶資料端點為 signed endpoint，需有 `X-MBX-APIKEY`、毫秒時間戳與簽名。此專案會先用 public market-data 路徑及離線簽名測試；收到使用者確認並建立 **Demo 專用** API Key 前，不呼叫任何認證端點。
+USDⓈ-M Futures 官方 General Info 文件列出真實 base URL `https://fapi.binance.com`，以及目前 Demo/Testnet REST base URL `https://demo-fapi.binance.com`。交易與帳戶資料端點為 signed endpoint，需有 `X-MBX-APIKEY`、毫秒時間戳與 HMAC SHA256 簽名。此專案會先用 public market-data 路徑及離線簽名測試；收到使用者確認並建立 **Demo 專用** API Key 前，不呼叫任何認證端點。
 
-USDⓈ-M Futures Trade API：<https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/trade>
+USDⓈ-M Futures General Info：<https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info>
 
 ## 技術實作邊界
 
@@ -35,4 +35,4 @@ USDⓈ-M Futures Trade API：<https://developers.binance.com/en/docs/catalog/cor
 
 ## 待補證的官方技術細節
 
-後續需從 USDⓈ-M Futures API Reference 取得並驗證以下事項：Demo REST base URL、`exchangeInfo` 的 BTCUSDT minQty／stepSize／minNotional、槓桿設定端點、下單端點、持倉端點與請求簽名格式。官方文件入口：<https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info>。
+已確認 Demo REST base URL 為 `https://demo-fapi.binance.com`。後續仍需在唯讀驗證時從 USDⓈ-M Futures API Reference 取得並驗證 `exchangeInfo` 的 BTCUSDT minQty／stepSize／minNotional，以及在使用者確認 Testnet 下單後驗證槓桿設定、下單、持倉端點與請求簽名格式。官方文件入口：<https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/general-info>。

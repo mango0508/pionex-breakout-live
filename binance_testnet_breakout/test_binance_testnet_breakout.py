@@ -46,6 +46,8 @@ class TestTestnetSafety(unittest.TestCase):
         self.assertEqual(require_safe_testnet_base_url(SAFE_TESTNET_BASE_URL), SAFE_TESTNET_BASE_URL)
         with self.assertRaises(ValueError):
             require_safe_testnet_base_url("https://fapi.binance.com")
+        with self.assertRaises(ValueError):
+            require_safe_testnet_base_url("https://testnet.binancefuture.com")
 
     def test_quantity_uses_margin_times_leverage_and_rounds_down(self):
         self.assertEqual(order_quantity_for_margin(50, 5, 100_000, "0.001", 0.001), 0.002)

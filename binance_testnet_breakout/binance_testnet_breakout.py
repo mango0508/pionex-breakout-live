@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Binance USDⓈ-M Futures Testnet BTC 5 分 K Breakout 執行器。
+"""Binance USDⓈ-M Futures Demo/Testnet BTC 5 分 K Breakout 執行器。
 
 安全界線：
-1. 僅接受 Binance USDⓈ-M Futures Testnet 網址。
+1. 僅接受 Binance USDⓈ-M Futures 官方 Demo/Testnet 網址。
 2. 預設 TESTNET_TRADING=false，絕不送單。
-3. 即使改為 true，仍只會對 Testnet 端點送出請求；程式拒絕主網網址。
+3. 即使改為 true，仍只會對 Demo/Testnet 端點送出請求；程式拒絕主網網址。
 4. 真實帳戶、Pionex API 與任何 Webhook 均不在此程式範圍內。
 """
 
@@ -30,7 +30,7 @@ import requests
 from dotenv import load_dotenv
 
 
-SAFE_TESTNET_BASE_URL = "https://testnet.binancefuture.com"
+SAFE_TESTNET_BASE_URL = "https://demo-fapi.binance.com"
 DEFAULT_SYMBOL = "BTCUSDT"
 DEFAULT_INTERVAL = "5m"
 
@@ -49,12 +49,12 @@ def parse_bool(value: str | None, default: bool = False) -> bool:
 
 
 def require_safe_testnet_base_url(base_url: str) -> str:
-    """拒絕任何主網或非官方 Testnet URL，避免誤接真實資金端點。"""
+    """拒絕任何主網、舊 URL 或非官方 Demo/Testnet URL，避免誤接真實資金端點。"""
     normalised = base_url.rstrip("/")
     if normalised != SAFE_TESTNET_BASE_URL:
         raise ValueError(
-            "安全停止：BINANCE_TESTNET_BASE_URL 必須精確為 "
-            f"{SAFE_TESTNET_BASE_URL}，程式拒絕使用其他端點。"
+            "安全停止：BINANCE_TESTNET_BASE_URL 必須精確為官方 Demo/Testnet 網域 "
+            f"{SAFE_TESTNET_BASE_URL}，程式拒絕舊 Testnet、主網與其他端點。"
         )
     return normalised
 
@@ -310,11 +310,11 @@ class BinanceTestnetClient:
         info = self._request("GET", "/fapi/v1/exchangeInfo")
         symbol_info = next((item for item in info["symbols"] if item["symbol"] == self.settings.symbol), None)
         if not symbol_info:
-            raise RuntimeError(f"Testnet exchangeInfo 未找到 {self.settings.symbol}。")
+            raise RuntimeError(f"Demo/Testnet exchangeInfo 未找到 {self.settings.symbol}。")
         filters = {item["filterType"]: item for item in symbol_info.get("filters", [])}
         lot_filter = filters.get("MARKET_LOT_SIZE") or filters.get("LOT_SIZE")
         if not lot_filter:
-            raise RuntimeError("Testnet exchangeInfo 未提供 LOT_SIZE 規格。")
+            raise RuntimeError("Demo/Testnet exchangeInfo 未提供 LOT_SIZE 規格。")
         return {"step_size": lot_filter["stepSize"], "min_qty": float(lot_filter["minQty"])}
 
     def set_leverage(self) -> Any:
@@ -474,7 +474,7 @@ def main() -> None:
     state = load_state(settings.state_path)
     client = BinanceTestnetClient(settings)
     logger.warning(
-        "START | Binance Futures Testnet only | TESTNET_TRADING=%s | mainnet is refused by code.",
+        "START | Binance Futures Demo/Testnet only | TESTNET_TRADING=%s | mainnet is refused by code.",
         settings.testnet_trading,
     )
     while True:
