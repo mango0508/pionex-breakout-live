@@ -77,3 +77,11 @@
 - 官方模板預設為 `pyramiding=100`、`default_qty_value=10`、`maxDCAEntries=10`，並使用固定 1% Take Profit／1% Stop Loss。這與使用者指定的單一 BTC 倉位及 ROE -8%／+10%／+15% 風控不相容，因此不得直接用此預設版本建立 Alert 或 Signal Bot。
 - 已建立 `tradingview/BTC_5M_Breakout_Pionex_SignalBot_ROE_Draft.pine` 作為**僅供 Strategy Tester 驗證**的衍生草稿。它不包含 Pionex Message、Webhook URL、API Key 或任何帳密；固定 `pyramiding=1` 與策略訂單大小 100 USDT（代表 Signal Bot 實際投資額的 100% 訊號份額），停用 DCA 與反向開倉，並保留原始 5 分 K 布林通道 + RSI 入場、ROE -8% 硬停損、+10% 後回落 +5% 及達 +15% 後回落 +10% 的收線估算出場規則。
 - 此草稿仍需由使用者在 TradingView 的 Pionex BTC USDT 永續 5 分鐘圖上編譯、加入圖表並檢查 Strategy Tester；在該驗證完成前不可建立 Webhook Alert、不可填入 listener Message，也不可建立活動 Signal Bot。
+
+## TradingView Strategy Tester 驗證結果（2026-08-15）
+
+- 使用者已將 `BTC_5M_Breakout_Pionex_SignalBot_ROE_Draft.pine` 加到 **Pionex BTC USDT Perpetual、5 分鐘**圖表；編輯器未顯示 Pine 編譯錯誤，Strategy Tester 的 List of trades 已顯示 LONG／SHORT 實際回測交易。
+- 使用者已將 Strategy Tester 的 Initial capital 設回 **100 USDT**。交易清單顯示約 **99.97–99.98 USDT** 的回測 size，與程式內 `default_qty_value = 100` 一致；此數字是派網 Signal Bot 的 100% 資金使用訊號比例，並非已送出的 100 USDT 實盤保證金。
+- 程式內已直接固定 `pyramiding = 1`，入場僅在 `strategy.position_size == 0` 時發出，沒有 `strategy.entry` 的 DCA 邏輯或反向翻倉邏輯；因此同一時間只會產生一筆倉位訊號。
+- 程式內估算 ROE 分別為：多單 `(close / avg_price - 1) × 100 × 5`，空單 `(avg_price / close - 1) × 100 × 5`。它在 5 分 K 收線時依序處理 **ROE ≤ -8%**、曾達 **+15%** 後回落至 **+10%**、以及曾達 **+10%** 後回落至 **+5%** 的全數平倉訊號。
+- 截至此驗證，TradingView 未建立 Alert、Pine 的 Pionex Message 保持空白、派網僅有未活動的 listener 草稿，且沒有活動 Signal Bot、持倉或成交。下一步若建立 Alert，仍須先確認 Pionex Bot 端不存在活動 Bot，並在建立後以 TradingView／Pionex Signal Log 做無交易送達驗證。
