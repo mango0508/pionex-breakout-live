@@ -42,3 +42,30 @@ SCAN_SYMBOL_ERROR | BRENTOIL_USDT_PERP | 掃描此交易對時已跳過：派網
 3. 合約自動化的官方替代方式為透過 Bot API 建立合約網格機器人，或使用 Signal Bot 串接訊號執行。
 
 因此，`TRADE_TYPE_DENIED` 並非使用者可在一般 API Key 編輯頁修復的設定錯誤。現有使用 `/uapi/v1/trade/order` 的直接市價下單與直接平倉路徑不可用於實盤，應先被明確封鎖，並將策略遷移至官方支援的 Bot API 或 Signal Bot 路線。
+
+## 官方遷移路線研究（2026-08-15）
+
+### Bot API 的 Futures Grid
+
+官方文件提供 Futures Grid Bot 的建立、查詢與參數檢查端點。建立端點是 `POST /api/v1/bot/orders/futuresGrid/create`；參數檢查端點是 `POST /api/v1/bot/orders/futuresGrid/checkParams`，可在建立前驗證價格區間、網格數、槓桿與投入金額。合約標的格式使用 `base=BTC.PERP`、`quote=USDT`；策略類型僅限 `long`、`short` 或 `no_trend`，且網格數必須為 2 至 500。
+
+這條路線可取代「建立合約網格機器人」，但不是原 Breakout 策略的等價執行器：原策略需要跨前 30 個標的掃描、布林＋RSI 單次進場，以及以 ROE 高水位為條件的兩段式平倉；Futures Grid API 的核心是配置一個價格區間、網格數與趨勢方向的網格機器人。因此不應將現有突破訊號直接轉為自動建立網格機器人，除非使用者另行確認網格交易本身就是想採用的策略。
+
+來源：https://www.pionex.com/docs/api-docs/bot-api/futures-grid
+
+### Signal Bot（最接近既有策略）
+
+官方說明指出 Signal Bot 會將 TradingView 策略警示透過 webhook 送至 Pionex Futures 執行。它可以依策略訊號開倉、反向或平倉；官方 FAQ 說明支援多次進出，但同一 Signal Bot 同時間只支援一個交易對，並且 Signal Bot 為 Futures 產品。官方設定流程要求：在 Pionex 建立 signal／Signal Bot、在 TradingView 使用可由 Strategy Tester 驗證的 strategy、把 Pionex webhook URL 放入 TradingView alert，然後對照兩端的信號日誌。
+
+對目前 Breakout 策略的限制：它掃描前 30 個合約，所以不能由「一個」Signal Bot 完整承接；若採用此路線，需要為每個想交易的標的建立獨立的 Signal Bot 與 TradingView alert。官方文件還指出 TradingView webhook 需要 Essential 或更高訂閱方案；建立或修改 Signal Bot 時應使用 Pionex 端的保證金、槓桿與風控設定，避免與 Pine Script 的 TPSL 同時控制而互相衝突。
+
+官方 Bot API 另提供 `POST /api/v1/bot/signal/listener` 用於推送 custom trading signal，但文件說明除一般讀取權限外，帳戶仍必須取得 Signal sending access，需聯絡 `open@pionex.com` 申請。這與「使用 Pionex 建立的 TradingView webhook」不同；不應假設現有 Python 程式可立即呼叫這個端點。
+
+來源：https://support.pionex.com/hc/en-us/articles/52606266734105-Signal-Bot
+來源：https://www.pionex.com/blog/signal-bot-and-tradingview-tutorial/
+來源：https://www.pionex.com/docs/api-docs/bot-api/signal
+
+官方 Bot API 的權限矩陣進一步確認：Futures Grid 的參數檢查與機器人資料讀取需要 Bot reading；建立、調整、減倉與取消 Futures Grid 則需要 Bot trading。`POST /api/v1/bot/signal/listener` 在 API Key 層只標示為 Enable reading，但 Signal 文件另要求帳戶層已啟用 custom signal sending。因此在尚未取得該帳戶級存取前，現有 Python 程式不可用它取代 TradingView webhook。
+
+來源：https://www.pionex.com/docs/api-docs/bot-api/general-info/authentication
+來源：https://www.pionex.com/docs/api-docs/references/api-key-permissions
