@@ -20,7 +20,7 @@
 
    ```dotenv
    MONITOR_TELEMETRY_ENABLED=true
-   MONITOR_DASHBOARD_INGEST_URL=https://your-monitor.manus.space/api/monitor/ingest
+   MONITOR_DASHBOARD_INGEST_URL=https://your-monitor.manus.space/api/telemetry/ingest
    MONITOR_INGEST_TOKEN=與雲端設定完全相同的長隨機權杖
    ```
 

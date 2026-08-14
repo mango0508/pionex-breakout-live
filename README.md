@@ -104,7 +104,7 @@ python pionex_breakout_live.py --telegram-test
 
 ```dotenv
 MONITOR_TELEMETRY_ENABLED=true
-MONITOR_DASHBOARD_INGEST_URL=https://你的監控網站網域/api/monitor/ingest
+MONITOR_DASHBOARD_INGEST_URL=https://你的監控網站網域/api/telemetry/ingest
 MONITOR_INGEST_TOKEN=與雲端監控網站相同的長隨機權杖
 ```
 
