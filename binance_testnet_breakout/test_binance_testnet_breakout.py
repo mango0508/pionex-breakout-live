@@ -1,8 +1,10 @@
-import unittest
 import logging
+import os
+import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -14,6 +16,7 @@ from binance_testnet_breakout import (
     breakout_signal,
     exchange_position_to_risk_state,
     evaluate_risk,
+    load_settings,
     order_quantity_for_margin,
     require_safe_testnet_base_url,
     synchronise_exchange_position,
@@ -60,6 +63,15 @@ class TestTestnetSafety(unittest.TestCase):
             require_safe_testnet_base_url(template_values["BINANCE_TESTNET_BASE_URL"]),
             SAFE_TESTNET_BASE_URL,
         )
+
+    def test_settings_load_rejects_legacy_endpoint_before_any_api_request(self):
+        with patch.dict(
+            os.environ,
+            {"BINANCE_TESTNET_BASE_URL": "https://testnet.binancefuture.com"},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "安全停止"):
+                load_settings()
 
     def test_quantity_uses_margin_times_leverage_and_rounds_down(self):
         self.assertEqual(order_quantity_for_margin(50, 5, 100_000, "0.001", 0.001), 0.002)
