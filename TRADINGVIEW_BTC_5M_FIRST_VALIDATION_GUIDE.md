@@ -62,6 +62,16 @@ tradingview/BTC_5M_Breakout_SignalBot_Validation.pine
 
 下一個階段會是「只驗證警示是否傳到 Pionex Signal Log」。這一步要求 TradingView Essential 或更高方案才可使用 webhook，並且會使用 Pionex 官方 Signal Bot strategy 所提供的訊息格式。[1] 在您主動確認要做該階段前，不會建立任何活動 Bot。
 
+## 已驗證紀錄：2026-08-15
+
+| 項目 | 已驗證結果 |
+|---|---|
+| 修正前現象 | 圖表可顯示 LONG／SHORT 訊號，但 Strategy Tester 回報需要交易數據。 |
+| 原因 | 舊版固定以 1 BTC 下回測單；在 1,000 USDT 初始資金下，BTC 單位數量超過可負擔範圍，因此訊號沒有轉為登錄交易。 |
+| 修正版本 | GitHub commit `d34a41a`，以 `validationNotionalUsdt / close` 將每筆回測調整為預設 50 USDT 名義部位。 |
+| 使用者實測 | 使用者已在 Pionex 的 BTC USDT Perpetual、5 分 K 圖表重新載入策略；Strategy Tester 的 **List of trades** 已顯示至少一筆 short 交易及其 Entry／Exit 時間。 |
+| 安全狀態 | 驗證期間未建立 Alert、未設定 webhook、未建立活動 Signal Bot，亦未發出實盤交易。 |
+
 ## References
 
 [1] [Pionex Help Center — Signal Bot](https://support.pionex.com/hc/en-us/articles/52606266734105-Signal-Bot)
