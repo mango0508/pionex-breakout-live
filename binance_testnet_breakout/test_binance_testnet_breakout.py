@@ -20,6 +20,7 @@ from binance_testnet_breakout import (
     main,
     order_quantity_for_margin,
     require_safe_testnet_base_url,
+    run_preflight,
     synchronise_exchange_position,
 )
 
@@ -43,6 +44,27 @@ class FakePositionClient:
     def get_position(self):
         self.calls += 1
         return self.position
+
+
+class FakePreflightClient:
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def get_klines(self):
+        self.calls.append("get_klines")
+        return pd.DataFrame({"close": [100_000.0]})
+
+    def exchange_symbol_rules(self):
+        self.calls.append("exchange_symbol_rules")
+        return {"step_size": "0.001", "min_qty": 0.001}
+
+    def get_usdt_available_balance(self):
+        self.calls.append("get_usdt_available_balance")
+        return {"available_balance": 100.0, "wallet_balance": 100.0}
+
+    def get_position(self):
+        self.calls.append("get_position")
+        return None
 
 
 class TestTestnetSafety(unittest.TestCase):
@@ -131,6 +153,18 @@ class TestTestnetSafety(unittest.TestCase):
         result = synchronise_exchange_position(settings(), local, client, logging.getLogger("test_read_only_mode"))
         self.assertIsNotNone(result.position)
         self.assertEqual(client.calls, 0)
+
+    def test_preflight_reads_conditions_without_setting_leverage_or_creating_order(self):
+        preflight_settings = replace(settings(), api_key="demo-key", api_secret="demo-secret")
+        client = FakePreflightClient()
+        report = run_preflight(preflight_settings, client, logging.getLogger("test_preflight"))
+        self.assertEqual(report["symbol"], "BTCUSDT")
+        self.assertEqual(report["planned_quantity"], 0.002)
+        self.assertFalse(report["existing_position"])
+        self.assertEqual(
+            client.calls,
+            ["get_klines", "exchange_symbol_rules", "get_usdt_available_balance", "get_position"],
+        )
 
     def test_external_close_clears_local_position(self):
         with TemporaryDirectory() as temporary:

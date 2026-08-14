@@ -52,6 +52,16 @@ python binance_testnet_breakout.py --once
 
 若您已經建立 `.env`，請確認其中的 `BINANCE_TESTNET_BASE_URL` 是 `https://demo-fapi.binance.com`；程式會拒絕舊網址 `https://testnet.binancefuture.com`，以避免新建的 Demo API Key 被誤送往錯誤環境。
 
+## Testnet 下單前的唯讀帳戶預檢
+
+在將 `TESTNET_TRADING` 改為 `true` 前，請先以已填入 Demo API Key 與 Secret 的 `.env` 執行：
+
+```powershell
+python binance_testnet_breakout.py --preflight
+```
+
+預檢只會讀取 BTCUSDT 已收盤 K 線、交易規格、USDT 可用／錢包餘額及既有 BTCUSDT 倉位，並顯示依 50 USDT、5× 所推算的預定數量。它**不會設定槓桿、不會寫入狀態檔，也不會建立或取消任何訂單**。成功時會顯示 `PREFLIGHT_OK`；若 API Futures 權限、餘額、簽章或交易規格不符合，程式會安全停止且不送單。
+
 ## 需要使用者明確確認後才能進行的 Testnet 動作
 
 1. 在 Binance Demo Trading 建立**專用的 Demo API Key**。

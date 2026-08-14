@@ -320,6 +320,16 @@ class BinanceTestnetClient:
     def set_leverage(self) -> Any:
         return self._request("POST", "/fapi/v1/leverage", {"symbol": self.settings.symbol, "leverage": self.settings.leverage}, signed=True)
 
+    def get_usdt_available_balance(self) -> dict[str, float]:
+        balances = self._request("GET", "/fapi/v2/balance", signed=True)
+        usdt = next((item for item in balances if item.get("asset") == "USDT"), None)
+        if not usdt:
+            raise RuntimeError("Demo/Testnet 帳戶未回傳 USDT 餘額資料。")
+        return {
+            "available_balance": float(usdt.get("availableBalance", 0)),
+            "wallet_balance": float(usdt.get("balance", 0)),
+        }
+
     def get_position(self) -> dict[str, Any] | None:
         positions = self._request("GET", "/fapi/v2/positionRisk", signed=True)
         for position in positions:
@@ -420,6 +430,44 @@ def synchronise_exchange_position(
     return state
 
 
+def run_preflight(settings: Settings, client: BinanceTestnetClient, logger: logging.Logger) -> dict[str, Any]:
+    """只讀取 Demo/Testnet 資料的帳戶預檢；此函式絕不設定槓桿或建立訂單。"""
+    if not settings.api_key or not settings.api_secret:
+        raise RuntimeError("缺少 Demo/Testnet API Key 或 Secret；帳戶預檢已安全停止。")
+    candles = client.get_klines()
+    if candles.empty:
+        raise RuntimeError("Demo/Testnet 未回傳已收盤 K 線，帳戶預檢已安全停止。")
+    current_price = float(candles.iloc[-1]["close"])
+    rules = client.exchange_symbol_rules()
+    planned_quantity = order_quantity_for_margin(
+        settings.margin_usdt,
+        settings.leverage,
+        current_price,
+        rules["step_size"],
+        rules["min_qty"],
+    )
+    balance = client.get_usdt_available_balance()
+    if balance["available_balance"] < settings.margin_usdt:
+        raise RuntimeError(
+            f"Demo/Testnet 可用 USDT {balance['available_balance']:.4f} 小於設定保證金 {settings.margin_usdt:.4f}；未送單。"
+        )
+    position = client.get_position()
+    report = {
+        "symbol": settings.symbol,
+        "price": current_price,
+        "margin_usdt": settings.margin_usdt,
+        "leverage": settings.leverage,
+        "planned_quantity": planned_quantity,
+        "step_size": rules["step_size"],
+        "min_qty": rules["min_qty"],
+        "available_usdt": balance["available_balance"],
+        "wallet_usdt": balance["wallet_balance"],
+        "existing_position": position is not None,
+    }
+    logger.warning("PREFLIGHT_OK | %s", report)
+    return report
+
+
 def run_once(settings: Settings, state: BotState, client: BinanceTestnetClient, logger: logging.Logger) -> BotState:
     state = synchronise_exchange_position(settings, state, client, logger)
     candles = client.get_klines()
@@ -468,15 +516,19 @@ def run_once(settings: Settings, state: BotState, client: BinanceTestnetClient, 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Binance Futures Testnet BTC 5 分 K Breakout 執行器")
     parser.add_argument("--once", action="store_true", help="只執行一次市場／策略檢查")
+    parser.add_argument("--preflight", action="store_true", help="只讀取 Demo/Testnet 帳戶條件；不設定槓桿或建立訂單")
     args = parser.parse_args()
     settings = load_settings()
     logger = configure_logger(settings.log_path)
-    state = load_state(settings.state_path)
     client = BinanceTestnetClient(settings)
     logger.warning(
         "START | Binance Futures Demo/Testnet only | TESTNET_TRADING=%s | mainnet is refused by code.",
         settings.testnet_trading,
     )
+    if args.preflight:
+        run_preflight(settings, client, logger)
+        return
+    state = load_state(settings.state_path)
     while True:
         try:
             state = run_once(settings, state, client, logger)
