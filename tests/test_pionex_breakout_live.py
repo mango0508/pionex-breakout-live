@@ -77,10 +77,6 @@ class APIParsingAndScanningTests(unittest.TestCase):
             "BTC_USDT_PERP": {"symbol": "BTC_USDT_PERP"},
             "ETH_USDT_PERP": {"symbol": "ETH_USDT_PERP"},
         }
-        client.perp_book_tickers = lambda: {
-            "BTC_USDT_PERP": {"symbol": "BTC_USDT_PERP", "bidPrice": "499", "askPrice": "500"},
-            "ETH_USDT_PERP": {"symbol": "ETH_USDT_PERP", "bidPrice": "199", "askPrice": "200"},
-        }
         client.public_get = lambda _path, _params=None: {
             "data": {
                 "tickers": [
@@ -96,14 +92,11 @@ class APIParsingAndScanningTests(unittest.TestCase):
         self.assertEqual([item[0] for item in ranked], ["BTC_USDT_PERP", "ETH_USDT_PERP"])
         self.assertEqual([item[2] for item in ranked], [Decimal("500"), Decimal("200")])
 
-    def test_scan_excludes_symbol_without_batch_bid_ask_quote(self) -> None:
+    def test_scan_keeps_tradable_symbol_without_bulk_book_ticker_quote(self) -> None:
         client = bot.PionexClient("", "")
         client.tradable_usdt_perp_symbols = lambda: {
             "BTC_USDT_PERP": {"symbol": "BTC_USDT_PERP"},
             "APR_USDT_PERP": {"symbol": "APR_USDT_PERP"},
-        }
-        client.perp_book_tickers = lambda: {
-            "BTC_USDT_PERP": {"symbol": "BTC_USDT_PERP", "bidPrice": "499", "askPrice": "500"},
         }
         client.public_get = lambda _path, _params=None: {
             "data": {
@@ -116,9 +109,9 @@ class APIParsingAndScanningTests(unittest.TestCase):
 
         ranked = client.top_tradable_usdt_perps(2)
 
-        self.assertEqual([item[0] for item in ranked], ["BTC_USDT_PERP"])
+        self.assertEqual([item[0] for item in ranked], ["APR_USDT_PERP", "BTC_USDT_PERP"])
 
-    def test_book_ticker_uses_bulk_perpetual_quote_endpoint(self) -> None:
+    def test_book_ticker_uses_depth_endpoint(self) -> None:
         client = bot.PionexClient("", "")
         calls: list[tuple[str, dict[str, str] | None]] = []
 
@@ -126,9 +119,8 @@ class APIParsingAndScanningTests(unittest.TestCase):
             calls.append((path, params))
             return {
                 "data": {
-                    "tickers": [
-                        {"symbol": "BTC_USDT_PERP", "bidPrice": "499", "askPrice": "500"},
-                    ]
+                    "bids": [["499", "2"]],
+                    "asks": [["500", "3"]],
                 }
             }
 
@@ -137,7 +129,8 @@ class APIParsingAndScanningTests(unittest.TestCase):
         quote = client.book_ticker("BTC_USDT_PERP")
 
         self.assertEqual(quote["askPrice"], "500")
-        self.assertEqual(calls, [("/api/v1/market/bookTicker", {"type": "PERP"})])
+        self.assertEqual(quote["bidPrice"], "499")
+        self.assertEqual(calls, [("/api/v1/market/depth", {"symbol": "BTC_USDT_PERP"})])
 
     def test_symbol_filter_accepts_observed_type_perp_shape(self) -> None:
         client = bot.PionexClient("", "")

@@ -484,17 +484,17 @@ class PionexClient:
         if top_n < 1:
             raise ValueError("SCAN_TOP_N 必須至少為 1")
         allowed = self.tradable_usdt_perp_symbols()
-        quoted_symbols = self.perp_book_tickers()
         data = self.public_get("/api/v1/market/tickers", {"type": "PERP"}).get("data", {})
         ranked: list[tuple[str, dict[str, Any], Decimal]] = []
         for ticker in data.get("tickers", []):
             if not isinstance(ticker, dict):
                 continue
             symbol = str(ticker.get("symbol", ""))
-            # 成交統計與合約清單可能暫時保留剛下架或沒有可用行情的標的。
-            # 先與官方 type=PERP 批次 bid/ask 清單取交集，避免個別 bookTicker
-            # 端點 404 的標的進入訊號／開倉流程。
-            if symbol not in allowed or symbol not in quoted_symbols:
+            # 成交統計可能短暫保留剛下架的標的，因此仍必須先通過官方合約
+            # 清單的 TRADING/USDT/PERP 驗證。派網實測中批次 bookTicker 路徑會回覆
+            # 404，不能把它當候選清單的唯一過濾條件；真正的 bid/ask 會在送單前
+            # 透過此交易對的深度端點再次驗證。
+            if symbol not in allowed:
                 continue
             try:
                 amount = as_decimal(ticker.get("amount", "0"), f"{symbol} 的 24h amount")
@@ -515,33 +515,34 @@ class PionexClient:
             raise PionexAPIError(f"無法取得 {symbol} 的唯一交易對規格。")
         return matches[0]
 
-    def perp_book_tickers(self) -> dict[str, dict[str, Any]]:
-        """取得可用的永續合約 bid/ask，作為候選與送單前的共同資料來源。"""
-        data = self.public_get("/api/v1/market/bookTicker", {"type": "PERP"}).get("data", {})
-        tickers = data.get("tickers", [])
-        quoted: dict[str, dict[str, Any]] = {}
-        for item in tickers:
-            if not isinstance(item, dict):
-                continue
-            symbol = str(item.get("symbol", "")).upper()
-            if not symbol.endswith("_USDT_PERP"):
-                continue
-            try:
-                bid = as_decimal(item.get("bidPrice"), f"{symbol} bidPrice")
-                ask = as_decimal(item.get("askPrice"), f"{symbol} askPrice")
-            except RuntimeError:
-                continue
-            if bid > 0 and ask > 0:
-                quoted[symbol] = item
-        if not quoted:
-            raise PionexAPIError("派網未回傳任何有效的 USDT 永續合約 bid/ask 報價。")
-        return quoted
-
     def book_ticker(self, symbol: str) -> dict[str, Any]:
-        ticker = self.perp_book_tickers().get(symbol)
-        if ticker is None:
-            raise PionexAPIError(f"沒有取得 {symbol} 的唯一 bid/ask 報價。")
-        return ticker
+        """從派網永續合約深度端點讀取最佳買一與賣一。
+
+        實測顯示 `/api/v1/market/bookTicker` 對 PERP 批次請求會回覆 404；
+        深度端點則會回傳 bids/asks 的價格、數量陣列。因此此處只在真正準備
+        計算下單數量時查詢指定交易對，並拒絕空簿或非正數報價。
+        """
+        data = self.public_get("/api/v1/market/depth", {"symbol": symbol}).get("data", {})
+        bids = data.get("bids", [])
+        asks = data.get("asks", [])
+        if not isinstance(bids, list) or not isinstance(asks, list) or not bids or not asks:
+            raise PionexAPIError(f"{symbol} 沒有有效的深度 bid/ask 報價。")
+
+        try:
+            best_bid = bids[0][0]
+            best_ask = asks[0][0]
+        except (IndexError, TypeError) as exc:
+            raise PionexAPIError(f"{symbol} 深度報價格式無法辨識。") from exc
+
+        bid = as_decimal(best_bid, f"{symbol} best bid")
+        ask = as_decimal(best_ask, f"{symbol} best ask")
+        if bid <= 0 or ask <= 0:
+            raise PionexAPIError(f"{symbol} 深度端點回傳無效的 bid/ask 報價。")
+        return {
+            "symbol": symbol,
+            "bidPrice": decimal_string(bid),
+            "askPrice": decimal_string(ask),
+        }
 
     def klines(self, symbol: str, limit: int = KLINE_LIMIT) -> list[dict[str, Any]]:
         data = self.public_get(
