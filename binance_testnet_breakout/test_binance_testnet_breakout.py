@@ -17,6 +17,7 @@ from binance_testnet_breakout import (
     exchange_position_to_risk_state,
     evaluate_risk,
     load_settings,
+    main,
     order_quantity_for_margin,
     require_safe_testnet_base_url,
     synchronise_exchange_position,
@@ -72,6 +73,24 @@ class TestTestnetSafety(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "安全停止"):
                 load_settings()
+
+    def test_main_stops_before_client_or_polling_for_legacy_endpoint(self):
+        with patch.dict(
+            os.environ,
+            {"BINANCE_TESTNET_BASE_URL": "https://testnet.binancefuture.com"},
+            clear=False,
+        ), patch("sys.argv", ["binance_testnet_breakout.py", "--once"]), patch(
+            "binance_testnet_breakout.configure_logger"
+        ) as configure_logger, patch(
+            "binance_testnet_breakout.load_state"
+        ) as load_state, patch(
+            "binance_testnet_breakout.BinanceTestnetClient"
+        ) as client:
+            with self.assertRaisesRegex(ValueError, "安全停止"):
+                main()
+        configure_logger.assert_not_called()
+        load_state.assert_not_called()
+        client.assert_not_called()
 
     def test_quantity_uses_margin_times_leverage_and_rounds_down(self):
         self.assertEqual(order_quantity_for_margin(50, 5, 100_000, "0.001", 0.001), 0.002)
