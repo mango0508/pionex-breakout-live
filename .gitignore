@@ -7,6 +7,9 @@
 pionex_live_state.json
 pionex_live_state.tmp
 pionex_live_events.csv
+binance_testnet_state.json
+binance_testnet_state.tmp
+binance_testnet_events.csv
 *.log
 
 # Python
