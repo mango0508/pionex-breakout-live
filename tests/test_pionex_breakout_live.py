@@ -71,6 +71,25 @@ class APIParsingAndScanningTests(unittest.TestCase):
                 "ETH_USDT_PERP",
             )
 
+    def test_leverage_auth_unavailable_blocks_entry_with_actionable_context(self) -> None:
+        class PermissionDeniedClient:
+            @staticmethod
+            def leverage(_symbol: str) -> Decimal:
+                raise bot.PionexAPIError("派網 API 失敗（HTTP 200）：AUTH_UNAVAILABLE have no right")
+
+        with patch.object(bot, "log_event") as log_event:
+            allowed = bot.symbol_leverage_matches(PermissionDeniedClient(), "BTC_USDT_PERP")
+
+        self.assertFalse(allowed)
+        log_event.assert_called_once()
+        args, context = log_event.call_args
+        self.assertEqual(args[0], "ENTRY_BLOCKED")
+        self.assertIn("AUTH_UNAVAILABLE", args[1])
+        self.assertEqual(args[2], "BTC_USDT_PERP")
+        self.assertEqual(context["endpoint"], "GET /uapi/v1/account/leverage")
+        self.assertEqual(context["required_permission"], "Enable reading")
+        self.assertEqual(context["required_for_order"], "Enable trading")
+
     def test_scan_keeps_only_tradable_usdt_perps_and_ranks_by_amount(self) -> None:
         client = bot.PionexClient("", "")
         client.tradable_usdt_perp_symbols = lambda: {

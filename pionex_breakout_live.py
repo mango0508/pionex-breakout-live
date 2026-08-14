@@ -946,7 +946,24 @@ def ensure_account_preflight(client: PionexClient) -> None:
 
 def symbol_leverage_matches(client: PionexClient, symbol: str) -> bool:
     """僅在確有訊號的交易對檢查槓桿；不自行設定槓桿。"""
-    current = client.leverage(symbol)
+    try:
+        current = client.leverage(symbol)
+    except PionexAPIError as exc:
+        if "AUTH_UNAVAILABLE" not in str(exc):
+            raise
+        # 絕不可在無法讀回交易所槓桿時，假設使用者已手動設為 5x 後繞過檢查。
+        # 官方文件將此 GET 端點列為 Enable reading；真正送單另需要 Enable trading。
+        log_event(
+            "ENTRY_BLOCKED",
+            "派網拒絕讀取槓桿（AUTH_UNAVAILABLE）；未送出訂單。請確認『同一把』API Key 已開啟 "
+            "Enable reading 與 Enable trading，且沒有因 IP 白名單限制而失效。本程式不會繞過 5x 槓桿驗證。",
+            symbol,
+            endpoint="GET /uapi/v1/account/leverage",
+            required_permission="Enable reading",
+            required_for_order="Enable trading",
+            configured_leverage=decimal_string(LEVERAGE),
+        )
+        return False
     if current != LEVERAGE:
         log_event(
             "ENTRY_BLOCKED",
