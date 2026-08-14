@@ -85,3 +85,14 @@
 - 程式內已直接固定 `pyramiding = 1`，入場僅在 `strategy.position_size == 0` 時發出，沒有 `strategy.entry` 的 DCA 邏輯或反向翻倉邏輯；因此同一時間只會產生一筆倉位訊號。
 - 程式內估算 ROE 分別為：多單 `(close / avg_price - 1) × 100 × 5`，空單 `(avg_price / close - 1) × 100 × 5`。它在 5 分 K 收線時依序處理 **ROE ≤ -8%**、曾達 **+15%** 後回落至 **+10%**、以及曾達 **+10%** 後回落至 **+5%** 的全數平倉訊號。
 - 截至此驗證，TradingView 未建立 Alert、Pine 的 Pionex Message 保持空白、派網僅有未活動的 listener 草稿，且沒有活動 Signal Bot、持倉或成交。下一步若建立 Alert，仍須先確認 Pionex Bot 端不存在活動 Bot，並在建立後以 TradingView／Pionex Signal Log 做無交易送達驗證。
+
+## 非活動 Alert 設定中的安全檢核（2026-08-15）
+
+- 使用者已重新授權其已登入的 TradingView 瀏覽器，並明確同意「僅建立非活動 Alert、驗證訊號送達」；此授權不涵蓋派網的 `Automate signal`、`Create the bot`、資金轉移或任何真實交易。
+- TradingView 圖表已重新核對為 **Pionex BTC USDT Perpetual、5 分鐘**，已載入 `BTC 5M Breakout — Pionex Signal Bot ROE Draft`，且 Strategy Tester 顯示 100 USDT 初始資金與有效回測交易。
+- 在 TradingView Alert 建立表單中，尚未建立價格 crossing Alert；必須改用上述策略的「Order fills／策略訂單成交」事件，並在建立前填入派網 listener 畫面提供的私密 webhook URL 與策略產生的訊息欄位。
+- 私密 Webhook URL 僅透過派網介面的複製控制項暫存於使用者瀏覽器剪貼簿；本文件、Git 儲存庫與對話均不記錄其值。Alert 建立成功前不得按下任何 Pionex 活動 Bot 建立按鈕。
+- 已在 TradingView Alert 表單將 Condition 由預設的價格 `Crossing` 切換為 **BTC 5M Breakout — Pionex Signal Bot ROE Draft** 策略；Interval 已保持「Same as chart / 5 minutes」，Message 已自動保留 `{{strategy.order.alert_message}}`。這可避免用價格條件替代策略訂單事件，且不會將 JSON 內容改寫為手動文字。
+- 下一步僅需在 Alert 的 Webhook URL 欄位貼入派網 listener 的受控剪貼簿值，並在確認 Condition、Interval、Message 與 Webhook 已完整時建立 Alert。此步不會建立 Pionex 活動 Signal Bot。
+- **2026-08-15 方案限制發現：** 在 TradingView Alert 的 Notifications 區啟用「Webhook URL」時，TradingView 顯示「React instantly with webhook notifications」升級提示，且目前帳戶方案為 **Basic**；介面未提供可輸入 Webhook URL 的欄位，而是導向 Essential 的「30-day free trial」。因此 Webhook Alert 尚未建立、任何 Pionex URL 未輸入 TradingView，且未有訊號送達或真實交易。此限制由 TradingView 畫面直接顯示，無法透過 Pionex listener 或 Pine 程式安全繞過。
+- Notifications 清單原本僅勾選 TradingView App 與 Toast；Webhook 為未勾選狀態。升級提示已關閉，未按任何試用、升級、付款或 Alert 建立按鈕。
