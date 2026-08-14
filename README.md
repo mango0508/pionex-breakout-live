@@ -63,7 +63,25 @@ ROE 以派網持倉回傳的未實現損益除以初始保證金計算。程式�
 
 第一次唯讀驗證時，請在派網帳戶確認倉位模式是 `BUYSELL`。當某個候選幣出現突破訊號時，若派網實際槓桿不是 5 倍，日誌會顯示 `ENTRY_BLOCKED`；這是正確的安全行為，沒有任何訂單送出。
 
-## 5. 如何讀日誌
+## 5. Telegram 通知的安全測試
+
+Telegram 預設停用，且與 `LIVE_TRADING` 是兩個獨立開關。若需要啟動、實盤開倉、平倉與實盤錯誤提醒，請只在本機 `.env` 填寫下列設定，絕不可將 Token 或 Chat ID 貼到聊天室、截圖或上傳 GitHub：
+
+```dotenv
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=你的 Bot Token
+TELEGRAM_CHAT_ID=你的 Chat ID
+```
+
+填寫後先執行下列命令。此命令只會發送一則 Telegram 測試訊息，**不會讀取派網帳戶、不會掃描市場，也不會下單**：
+
+```bash
+python pionex_breakout_live.py --telegram-test
+```
+
+只有在手機確實收到測試通知後，才適合進入實盤上線前的最後人工檢核。通知傳送失敗只會記錄警告，不會停掉持倉風控；因此實盤時仍須保留終端機與派網 App 的主動監控。
+
+## 6. 如何讀日誌
 
 `pionex_live_events.csv` 是 UTF-8 CSV，可直接用 Excel 或 VS Code 開啟。欄位 `context_json` 保存該事件的附加資料。
 
@@ -78,13 +96,13 @@ ROE 以派網持倉回傳的未實現損益除以初始保證金計算。程式�
 | `EXIT_SENT` | 實盤或唯讀模式的平倉指令／模擬平倉紀錄。 |
 | `ERROR` | 本輪流程出錯；程式會等待下一輪再重試。 |
 
-## 6. Render 部署的重要限制
+## 7. Render 部署的重要限制
 
 Render 免費 Web Service 沒有持久化磁碟，重新部署或重啟後，`pionex_live_state.json` 和日誌都可能遺失。這會讓系統忘記每日交易計數與「曾達 +15% ROE」的高水位狀態。因此目前 Render 免費方案只能作為 **`LIVE_TRADING=false` 的唯讀雷達**；不可作為持續實盤風控服務。
 
 在 Render 的環境變數中應個別新增 API Key、API Secret 與各設定值，**不要**上傳 `.env`。在正式實盤之前，需要先改用具持久化儲存與可靠重啟機制的環境，並完成所有離線與唯讀驗證。
 
-## 7. 可執行的離線測試
+## 8. 可執行的離線測試
 
 不需 API Key，也不會連網：
 
@@ -92,7 +110,7 @@ Render 免費 Web Service 沒有持久化磁碟，重新部署或重啟後，`pi
 python -m unittest discover -s tests -v
 ```
 
-測試覆蓋保證金階梯邊界、交易對熱門排序、槓桿解析、布林／RSI 訊號與兩段式 ROE 風控。每次修改策略後都應先執行這個命令。
+測試覆蓋保證金階梯邊界、交易對熱門排序、槓桿解析、布林／RSI 訊號、兩段式 ROE 風控與 Telegram 通知的離線請求防護。每次修改策略後都應先執行這個命令。
 
 ## References
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from decimal import Decimal
 from pathlib import Path
 
@@ -247,6 +248,34 @@ class RiskManagementTests(unittest.TestCase):
         bot.run_once(client, state)
         self.assertEqual(client.orders, [])
         self.assertIn("UNMANAGED_POSITION", bot.EVENT_LOG_PATH.read_text(encoding="utf-8"))
+
+
+class TelegramNotificationTests(unittest.TestCase):
+    def test_disabled_telegram_never_makes_network_request(self) -> None:
+        with patch.object(bot, "TELEGRAM_ENABLED", False), patch.object(bot.requests, "post") as post:
+            self.assertFalse(bot.send_telegram("不應送出的測試"))
+            post.assert_not_called()
+
+    def test_enabled_telegram_posts_to_expected_endpoint(self) -> None:
+        class FakeResponse:
+            status_code = 200
+
+            @staticmethod
+            def json() -> dict[str, bool]:
+                return {"ok": True}
+
+        with (
+            patch.object(bot, "TELEGRAM_ENABLED", True),
+            patch.object(bot, "TELEGRAM_BOT_TOKEN", "test-token"),
+            patch.object(bot, "TELEGRAM_CHAT_ID", "12345"),
+            patch.object(bot.requests, "post", return_value=FakeResponse()) as post,
+        ):
+            self.assertTrue(bot.send_telegram("測試訊息"))
+            post.assert_called_once_with(
+                "https://api.telegram.org/bottest-token/sendMessage",
+                json={"chat_id": "12345", "text": "測試訊息"},
+                timeout=8,
+            )
 
 
 if __name__ == "__main__":

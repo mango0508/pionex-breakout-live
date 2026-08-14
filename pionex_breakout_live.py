@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import hashlib
 import hmac
@@ -64,6 +65,10 @@ RSI_SHORT_MAX = Decimal(os.getenv("RSI_SHORT_MAX", "45"))
 LIVE_TRADING = os.getenv("LIVE_TRADING", "false").strip().lower() == "true"
 API_KEY = os.getenv("PIONEX_API_KEY", "").strip()
 API_SECRET = os.getenv("PIONEX_API_SECRET", "").strip()
+# Telegram 為可選通知；預設停用，且不影響下單與風控邏輯。
+TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").strip().lower() == "true"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 
 def project_path_from_env(variable: str, default_name: str) -> Path:
@@ -163,6 +168,31 @@ def save_state(state: BotState) -> None:
 
 def taipei_now() -> str:
     return datetime.now(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def send_telegram(message: str) -> bool:
+    """傳送可選 Telegram 通知；失敗只記錄警告，絕不影響交易風控流程。"""
+    if not TELEGRAM_ENABLED:
+        return False
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        LOG.warning("Telegram 已啟用但缺少 Bot Token 或 Chat ID；略過通知。")
+        return False
+
+    safe_message = str(message).strip()[:3500]
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": safe_message},
+            timeout=8,
+        )
+        payload = response.json()
+        if response.status_code >= 400 or not payload.get("ok", False):
+            LOG.warning("Telegram 通知失敗：HTTP %s。", response.status_code)
+            return False
+    except (requests.RequestException, ValueError) as exc:
+        LOG.warning("Telegram 通知連線失敗：%s", exc)
+        return False
+    return True
 
 
 def log_event(event: str, detail: str, symbol: str = "", **context: Any) -> None:
@@ -795,6 +825,14 @@ def open_position(
         order_status=resolution.get("status"),
         filled_size=resolution.get("filledSize"),
     )
+    if LIVE_TRADING:
+        send_telegram(
+            f"[派網實盤開倉] {symbol} {signal}\n"
+            f"保證金階梯：{margin_usdt} USDT\n"
+            f"預計名目額：{actual_notional:.4f} USDT\n"
+            f"委託狀態：{resolution.get('status')}\n"
+            "最終成交與持倉請以派網為準。"
+        )
     return True
 
 
@@ -846,6 +884,13 @@ def close_position(client: PionexClient, state: BotState, position: dict[str, An
         order_status=resolution.get("status"),
         filled_size=resolution.get("filledSize"),
     )
+    if LIVE_TRADING:
+        send_telegram(
+            f"[派網實盤平倉] {symbol}\n原因：{reason}\n"
+            f"平倉前 ROE：{roe:.2f}%\n"
+            f"委託狀態：{resolution.get('status')}\n"
+            "已實現損益請以派網歷史持倉為準。"
+        )
 
 
 def monitor_position(client: PionexClient, state: BotState, position: dict[str, Any]) -> None:
@@ -1010,6 +1055,12 @@ def main() -> None:
         lock_profit_exit_roe_pct=decimal_string(LOCK_PROFIT_EXIT_ROE_PCT),
         max_trades_per_utc_day=MAX_TRADES_PER_UTC_DAY,
     )
+    send_telegram(
+        f"[派網機器人啟動] 模式：{'實盤' if LIVE_TRADING else '唯讀'}\n"
+        f"掃描：前 {SCAN_TOP_N} 個 USDT 永續合約\n"
+        f"設定槓桿：{LEVERAGE}x\n"
+        f"每日開倉上限：{MAX_TRADES_PER_UTC_DAY} 筆"
+    )
 
     while True:
         try:
@@ -1017,8 +1068,27 @@ def main() -> None:
         except Exception as exc:
             LOG.exception("迴圈錯誤")
             log_event("ERROR", str(exc))
+            if LIVE_TRADING:
+                send_telegram(f"[派網機器人錯誤] {str(exc)[:800]}")
         time.sleep(LOOP_SECONDS)
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="派網多幣 Breakout 執行器")
+    parser.add_argument(
+        "--telegram-test",
+        action="store_true",
+        help="只測試 Telegram 通知；不讀取派網帳戶、不掃描市場、不會下單。",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    if args.telegram_test:
+        if send_telegram("[派網機器人] Telegram 通知測試成功；未連線派網、未掃描市場、未送出訂單。"):
+            LOG.info("Telegram 測試訊息已送出。")
+        else:
+            raise SystemExit("Telegram 測試失敗；請確認 TELEGRAM_ENABLED、Bot Token 與 Chat ID。")
+    else:
+        main()
