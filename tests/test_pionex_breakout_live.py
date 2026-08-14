@@ -111,6 +111,29 @@ class APIParsingAndScanningTests(unittest.TestCase):
         self.assertEqual(context["exchange_code"], "TRADE_TYPE_DENIED")
         self.assertEqual(context["blocked_product"], "USDT 永續合約（Futures／Perpetual）")
 
+    def test_live_entry_is_blocked_before_private_endpoints_when_direct_orders_unsupported(self) -> None:
+        class ClientThatMustNotBeCalled:
+            @staticmethod
+            def leverage(_symbol: str) -> Decimal:
+                raise AssertionError("封鎖直接下單時不可讀取槓桿端點")
+
+        state = bot.BotState()
+        with (
+            patch.object(bot, "LIVE_TRADING", True),
+            patch.object(bot, "DIRECT_FUTURES_ORDERING_SUPPORTED", False),
+            patch.object(bot, "log_event") as log_event,
+        ):
+            opened = bot.open_position(
+                ClientThatMustNotBeCalled(), state, "BTC_USDT_PERP", 1_700_000_000_000, "LONG"
+            )
+
+        self.assertFalse(opened)
+        log_event.assert_called_once()
+        args, context = log_event.call_args
+        self.assertEqual(args[0], "ENTRY_BLOCKED")
+        self.assertIn("Public Trade API", args[1])
+        self.assertEqual(context["direct_futures_orders_supported"], False)
+
     def test_scan_keeps_only_tradable_usdt_perps_and_ranks_by_amount(self) -> None:
         client = bot.PionexClient("", "")
         client.tradable_usdt_perp_symbols = lambda: {

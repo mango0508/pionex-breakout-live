@@ -52,17 +52,15 @@
 
 ## 四、出現 `TRADE_TYPE_DENIED user denied not in whitelist` 時的處理方式
 
-若日誌出現 `SIGNAL ... LONG` 或 `SHORT` 後，緊接著出現 `TRADE_TYPE_DENIED user denied not in whitelist`，可確認派網是在 `GET /uapi/v1/account/leverage` 的 5× 槓桿安全檢查拒絕這把 API Key。這不是策略訊號問題，也不是可用保證金不足；程式在此情況下會刻意停止，**不會送出訂單**。
+派網官方客服已確認：`/uapi/v1` 的合約讀取功能（槓桿、保證金模式、持倉、餘額）只需要一般讀取權限；但是 **Public Trade API 目前不對所有帳戶開放直接 USDT 永續合約下單**。官方也明確表示，沒有 API Key 白名單申請、名額候補或透過客服開通直接下單功能的流程。
 
-已在派網 API Key 的一般「編輯」頁確認：該頁只提供一般交易、機器人讀取、機器人交易與 IP 權限，沒有 Futures、Perpetual、USDT 永續或交易類型白名單選項。因此不要反覆重建 API Key、不要把 IP 白名單移除，也不要嘗試關閉程式的槓桿驗證。
+因此，`TRADE_TYPE_DENIED user denied not in whitelist` 不是可在一般 API Key 編輯頁修好的設定錯誤。請不要反覆重建 API Key、不要移除 IP 白名單、不要啟用轉帳權限，也不要停用程式的安全檢查；這些動作都不能使直接合約下單功能開通。
 
-請使用派網的官方線上客服或提交客服單，複製以下文字即可；請**不要**附上 API Key、Secret、Token、完整 IP 或帳戶截圖：
+請立刻在仍執行中的舊版黑色視窗按 `Ctrl + C` 停止程式，避免後續訊號繼續觸發不支援的直接下單流程。新版程式已加入不可繞過的保護：即使 `.env` 保留 `LIVE_TRADING=true`，它也只會掃描、讀取與上傳監控資料，不會呼叫直接開倉或 `reduceOnly` 平倉端點。
 
-> 我的 API Key 已啟用一般讀取與交易權限，但呼叫 `GET /uapi/v1/account/leverage` 時回覆 `TRADE_TYPE_DENIED: user denied not in whitelist`。請協助確認此帳戶／API Key 是否已具備 **USDT 永續合約（Futures／Perpetual）API 交易類型**的白名單或產品授權；若未開通，請告知官方開通步驟。
+派網官方提供的合約自動化替代方案為 **Bot API 的合約網格機器人** 或 **Signal Bot（訊號機器人）**。本機 Breakout 程式可先維持為安全的掃描／訊號／監控來源；真正的合約執行邏輯必須依官方支援的 Bot API 或 Signal Bot 介面重新設計與驗證後，才可恢復自動化。
 
-客服確認處理完成後，重新啟動程式即可；不需要更改 `.env` 的 API Key 值。新版程式會將此情況記成含端點與產品名稱的 `ENTRY_BLOCKED` 事件，方便您確認客服處理是否已生效。
-
-此外，開倉之前，合約帳戶還必須保有至少 **50 USDT 的真實可用 USDT**，並保留程式設定的 10 USDT 緩衝。模擬用的 PUSD 不可替代真實 USDT；即使白名單已開通，真實可用餘額不足時程式仍會安全地拒絕開倉。
+另外，合約帳戶仍必須保有至少 **50 USDT 的真實可用 USDT** 才可能建立未來的官方合約機器人。模擬用的 PUSD 不可替代真實 USDT。
 
 ## 五、啟用雲端唯讀監控
 

@@ -65,6 +65,10 @@ RSI_SHORT_MAX = Decimal(os.getenv("RSI_SHORT_MAX", "45"))
 LIVE_TRADING = os.getenv("LIVE_TRADING", "false").strip().lower() == "true"
 API_KEY = os.getenv("PIONEX_API_KEY", "").strip()
 API_SECRET = os.getenv("PIONEX_API_SECRET", "").strip()
+# 派網客服於 2026-08-15 明確確認：Public Trade API 的直接 USDT 永續合約下單
+# 並未對所有帳戶開放，也沒有可申請的白名單流程。因此不得以環境變數繞過此封鎖。
+# 唯讀掃描與 DRY_RUN 模擬維持可用；實盤執行須改採官方支援的 Bot API 或 Signal Bot。
+DIRECT_FUTURES_ORDERING_SUPPORTED = False
 # Telegram 為可選通知；預設停用，且不影響下單與風控邏輯。
 TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").strip().lower() == "true"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -1018,6 +1022,17 @@ def open_position(
     signal: Literal["LONG", "SHORT"],
 ) -> bool:
     """建立或模擬一筆開倉；成功送出／模擬時回傳 True。"""
+    if LIVE_TRADING and not DIRECT_FUTURES_ORDERING_SUPPORTED:
+        log_event(
+            "ENTRY_BLOCKED",
+            "派網官方已確認 Public Trade API 目前不支援此帳戶直接進行 USDT 永續合約下單；"
+            "未呼叫槓桿或下單端點。請改採官方支援的 Bot API 或 Signal Bot 路線。",
+            symbol,
+            configured_mode="LIVE",
+            direct_futures_orders_supported=False,
+            migration_target="Bot API 或 Signal Bot",
+        )
+        return False
     if not symbol_leverage_matches(client, symbol):
         return False
 
@@ -1095,6 +1110,19 @@ def close_position(client: PionexClient, state: BotState, position: dict[str, An
 
     key, risk = risk_state_for(state, position)
     if not LIVE_TRADING and risk.dry_run_exit_logged:
+        return
+
+    if LIVE_TRADING and not DIRECT_FUTURES_ORDERING_SUPPORTED:
+        log_event(
+            "EXIT_BLOCKED",
+            "派網官方已確認 Public Trade API 不支援直接永續合約平倉；"
+            "未送出 reduceOnly 指令，請在派網官方介面處理現有倉位。",
+            symbol,
+            configured_mode="LIVE",
+            direct_futures_orders_supported=False,
+            position_id=str(position.get("positionId", "unknown")),
+            reason=reason,
+        )
         return
 
     side: Literal["BUY", "SELL"] = "SELL" if net_size > 0 else "BUY"
@@ -1294,8 +1322,16 @@ def main() -> None:
     monitor_reporter = MonitorTelemetryReporter()
     log_event(
         "START",
-        f"多幣 Breakout 執行器啟動；目前模式：{'實盤' if LIVE_TRADING else '唯讀'}。",
-        mode="LIVE" if LIVE_TRADING else "READ_ONLY",
+        "多幣 Breakout 執行器啟動；目前模式："
+        + (
+            "實盤設定已啟用，但派網 Public Trade API 的直接 USDT 永續合約下單已被安全封鎖；"
+            "僅掃描與監控，待遷移至 Bot API 或 Signal Bot。"
+            if LIVE_TRADING and not DIRECT_FUTURES_ORDERING_SUPPORTED
+            else ("實盤" if LIVE_TRADING else "唯讀")
+        ),
+        mode=("LIVE_DIRECT_ORDERS_BLOCKED" if LIVE_TRADING and not DIRECT_FUTURES_ORDERING_SUPPORTED
+              else ("LIVE" if LIVE_TRADING else "READ_ONLY")),
+        direct_futures_orders_supported=DIRECT_FUTURES_ORDERING_SUPPORTED,
         leverage=decimal_string(LEVERAGE),
         scan_top_n=SCAN_TOP_N,
         stop_roe_pct=decimal_string(STOP_ROE_PCT),
@@ -1304,11 +1340,21 @@ def main() -> None:
         lock_profit_peak_roe_pct=decimal_string(LOCK_PROFIT_PEAK_ROE_PCT),
         lock_profit_exit_roe_pct=decimal_string(LOCK_PROFIT_EXIT_ROE_PCT),
     )
+    startup_mode = (
+        "實盤設定已啟用，但直接永續合約下單已封鎖"
+        if LIVE_TRADING and not DIRECT_FUTURES_ORDERING_SUPPORTED
+        else ("實盤" if LIVE_TRADING else "唯讀")
+    )
+    startup_policy = (
+        "不會呼叫派網直接下單／平倉端點；待遷移至 Bot API 或 Signal Bot。"
+        if LIVE_TRADING and not DIRECT_FUTURES_ORDERING_SUPPORTED
+        else "每日實盤開倉次數：不限制（仍維持單一活動倉位與 ROE 風控）"
+    )
     send_telegram(
-        f"[派網機器人啟動] 模式：{'實盤' if LIVE_TRADING else '唯讀'}\n"
+        f"[派網機器人啟動] 模式：{startup_mode}\n"
         f"掃描：前 {SCAN_TOP_N} 個 USDT 永續合約\n"
         f"設定槓桿：{LEVERAGE}x\n"
-        "每日實盤開倉次數：不限制（仍維持單一活動倉位與 ROE 風控）"
+        f"{startup_policy}"
     )
     monitor_reporter.start()
 
