@@ -249,6 +249,29 @@ class RiskManagementTests(unittest.TestCase):
         self.assertEqual(client.orders, [])
         self.assertIn("UNMANAGED_POSITION", bot.EVENT_LOG_PATH.read_text(encoding="utf-8"))
 
+    def test_high_daily_counter_does_not_block_new_entry(self) -> None:
+        state = bot.BotState(trades_today=999)
+        with (
+            patch.object(bot, "symbol_leverage_matches", return_value=True),
+            patch.object(bot, "get_free_usdt", return_value=Decimal("50")),
+            patch.object(
+                bot,
+                "calculate_entry_size",
+                return_value=(Decimal("1"), Decimal("100"), Decimal("100")),
+            ),
+        ):
+            opened = bot.open_position(
+                self.client,
+                state,
+                "BTC_USDT_PERP",
+                1234567890,
+                "LONG",
+            )
+
+        self.assertTrue(opened)
+        self.assertEqual(len(self.client.orders), 1)
+        self.assertEqual(state.trades_today, 999)
+
 
 class TelegramNotificationTests(unittest.TestCase):
     def test_disabled_telegram_never_makes_network_request(self) -> None:

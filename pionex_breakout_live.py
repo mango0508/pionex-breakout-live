@@ -52,7 +52,6 @@ PROTECTION_ACTIVATION_ROE_PCT = Decimal(os.getenv("PROTECTION_ACTIVATION_ROE_PCT
 PROTECTION_FLOOR_ROE_PCT = Decimal(os.getenv("PROTECTION_FLOOR_ROE_PCT", "5"))
 LOCK_PROFIT_PEAK_ROE_PCT = Decimal(os.getenv("LOCK_PROFIT_PEAK_ROE_PCT", "15"))
 LOCK_PROFIT_EXIT_ROE_PCT = Decimal(os.getenv("LOCK_PROFIT_EXIT_ROE_PCT", "10"))
-MAX_TRADES_PER_UTC_DAY = int(os.getenv("MAX_TRADES_PER_UTC_DAY", "3"))
 # 預設為 0，才精確符合「可用 USDT 至少 50 即可進入第一階」的規則。
 MIN_FREE_BALANCE_BUFFER = Decimal(os.getenv("MIN_FREE_BALANCE_BUFFER", "0"))
 
@@ -765,9 +764,6 @@ def open_position(
     signal: Literal["LONG", "SHORT"],
 ) -> bool:
     """建立或模擬一筆開倉；成功送出／模擬時回傳 True。"""
-    if state.trades_today >= MAX_TRADES_PER_UTC_DAY:
-        log_event("ENTRY_BLOCKED", "已達每日實盤開倉上限。", symbol, trades_today=state.trades_today)
-        return False
     if not symbol_leverage_matches(client, symbol):
         return False
 
@@ -790,7 +786,7 @@ def open_position(
     )
     request = response["request"]
     state.last_entry_client_order_id = request["clientOrderId"]
-    # 唯讀模式不耗用實盤每日額度；實盤以「送單成功」保守計數。
+    # 僅保留實盤成功送單的每日統計；不作為開倉次數限制。
     if LIVE_TRADING:
         state.trades_today += 1
     save_state(state)
@@ -990,9 +986,6 @@ def scan_for_entry(client: PionexClient, state: BotState) -> None:
             )
 
             if result.signal in ("LONG", "SHORT"):
-                if state.trades_today >= MAX_TRADES_PER_UTC_DAY:
-                    log_event("ENTRY_BLOCKED", "已達每日實盤開倉上限，停止本輪掃描。", symbol, trades_today=state.trades_today)
-                    return
                 if open_position(client, state, symbol, closed_time, result.signal):
                     # 單一活動倉位設計：本輪只處理第一個確實送出或模擬的訊號。
                     return
@@ -1053,13 +1046,12 @@ def main() -> None:
         protection_floor_roe_pct=decimal_string(PROTECTION_FLOOR_ROE_PCT),
         lock_profit_peak_roe_pct=decimal_string(LOCK_PROFIT_PEAK_ROE_PCT),
         lock_profit_exit_roe_pct=decimal_string(LOCK_PROFIT_EXIT_ROE_PCT),
-        max_trades_per_utc_day=MAX_TRADES_PER_UTC_DAY,
     )
     send_telegram(
         f"[派網機器人啟動] 模式：{'實盤' if LIVE_TRADING else '唯讀'}\n"
         f"掃描：前 {SCAN_TOP_N} 個 USDT 永續合約\n"
         f"設定槓桿：{LEVERAGE}x\n"
-        f"每日開倉上限：{MAX_TRADES_PER_UTC_DAY} 筆"
+        "每日實盤開倉次數：不限制（仍維持單一活動倉位與 ROE 風控）"
     )
 
     while True:

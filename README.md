@@ -13,7 +13,7 @@
 | 持倉隔離 | 只有本程式成功開倉後已登錄的持倉才會進入自動 ROE 風控；手動或其他策略建立、以及狀態遺失的倉位只會顯示 `UNMANAGED_POSITION`，絕不自動平倉。 |
 | 倉位模式 | 僅支援派網單向 `BUYSELL` 與 `positionSide=BOTH`。 |
 | 槓桿 | 僅在某交易對產生訊號時檢查其槓桿是否為 5 倍；不一致就跳過該交易對，絕不自動修改。 |
-| 每日限制 | 實盤送出開倉後才計入每日最多 3 筆；唯讀模式不消耗此額度。 |
+| 每日交易次數 | **不設每日開倉上限**；系統仍保存當日實盤成功開倉數供日誌統計，且一次只允許一筆活動倉位。 |
 | 機密保護 | `.env`、狀態檔及交易日誌均列入 `.gitignore`，不可上傳 GitHub。 |
 
 系統從派網的交易對資訊端點篩選 `TRADING`、`PERPETUAL`、`USDT` 合約，並以 ticker 的 24 小時 `amount` 成交額取前 30 名。[1] [2]
@@ -90,7 +90,7 @@ python pionex_breakout_live.py --telegram-test
 | `START` | 程式已啟動並寫入目前風控設定。 |
 | `SCAN_START` | 開始新的前 30 熱門合約掃描輪次。 |
 | `SIGNAL` | 某已收線 K 棒已計算出 LONG、SHORT 或 HOLD。 |
-| `ENTRY_BLOCKED` | 有訊號但被安全檢核阻擋，例如槓桿不符、餘額不足或達到每日上限。 |
+| `ENTRY_BLOCKED` | 有訊號但被安全檢核阻擋，例如槓桿不符、餘額不足、交易規格不符或帳戶已有活動倉位。 |
 | `DRY_RUN_ORDER` | 唯讀模式產生的假設訂單；**沒有發送給派網**。 |
 | `POSITION_MONITOR` | 現有持倉的 ROE、峰值與保護狀態。 |
 | `EXIT_SENT` | 實盤或唯讀模式的平倉指令／模擬平倉紀錄。 |
@@ -98,7 +98,7 @@ python pionex_breakout_live.py --telegram-test
 
 ## 7. Render 部署的重要限制
 
-Render 免費 Web Service 沒有持久化磁碟，重新部署或重啟後，`pionex_live_state.json` 和日誌都可能遺失。這會讓系統忘記每日交易計數與「曾達 +15% ROE」的高水位狀態。因此目前 Render 免費方案只能作為 **`LIVE_TRADING=false` 的唯讀雷達**；不可作為持續實盤風控服務。
+Render 免費 Web Service 沒有持久化磁碟，重新部署或重啟後，`pionex_live_state.json` 和日誌都可能遺失。這會讓系統忘記「曾達 +15% ROE」的高水位狀態；當日開倉數雖只作統計，也會重置。因此目前 Render 免費方案只能作為 **`LIVE_TRADING=false` 的唯讀雷達**；不可作為持續實盤風控服務。
 
 在 Render 的環境變數中應個別新增 API Key、API Secret 與各設定值，**不要**上傳 `.env`。在正式實盤之前，需要先改用具持久化儲存與可靠重啟機制的環境，並完成所有離線與唯讀驗證。
 
