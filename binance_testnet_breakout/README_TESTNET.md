@@ -62,6 +62,41 @@ python binance_testnet_breakout.py --preflight
 
 預檢只會讀取 BTCUSDT 已收盤 K 線、交易規格、USDT 可用／錢包餘額及既有 BTCUSDT 倉位，並顯示依 50 USDT、5× 所推算的預定數量。它**不會設定槓桿、不會寫入狀態檔，也不會建立或取消任何訂單**。成功時會顯示 `PREFLIGHT_OK`；若 API Futures 權限、餘額、簽章或交易規格不符合，程式會安全停止且不送單。
 
+## 連接私人唯讀監控網站
+
+> 此功能由**本機**程式上傳去敏感化監控資料，因 Binance 對目前網站雲端來源施加地區／存取限制，網站端的 5 分鐘策略工作保持暫停。網站不提供下單、平倉、轉帳或提幣按鈕，Telegram 亦保持停用。
+
+1. 以擁有者帳戶登入監控網站：<https://pionexdash-x73yw8sp.manus.space>。
+2. 在「**本機監控連線**」卡片按 **建立本機配對權杖**，立刻複製一次性權杖。重新建立會撤銷上一組；請勿把它貼到聊天、GitHub 或任何公開頁面。
+3. 在本機 `binance_testnet_breakout/.env` 的最後加入下列設定，將 `PASTE_THE_ONE_TIME_TOKEN_HERE` 改成剛複製的內容：
+
+```dotenv
+MONITOR_TELEMETRY_ENABLED=true
+MONITOR_INGEST_URL=https://pionexdash-x73yw8sp.manus.space/api/telemetry/ingest
+MONITOR_INGEST_TOKEN=PASTE_THE_ONE_TIME_TOKEN_HERE
+MONITOR_TELEMETRY_TIMEOUT_SECONDS=10
+```
+
+4. **先保持 `TESTNET_TRADING=false`**，執行一次純讀取煙霧測試：
+
+```powershell
+python binance_testnet_breakout.py --telemetry-smoke-test
+```
+
+此指令只讀取 Demo 帳戶餘額、BTCUSDT 持倉與已收盤 K 線，然後上傳監控快照；它不設定槓桿、不建立、不修改也不取消訂單。成功時會出現 `TELEMETRY_OK`。回到網站等待約 10 秒，即應能看到餘額、持倉／無持倉、最新策略狀態與事件。
+
+若顯示 `TELEMETRY_ERROR`，請先確認權杖仍是最新建立的一組、網址未更動，並在網站重新建立權杖後覆蓋 `.env` 中的 `MONITOR_INGEST_TOKEN`。程式會安全跳過該次上傳，不會因此改變任何 Testnet 倉位。
+
+## 半日 Testnet 驗證
+
+確認上一步網站能顯示資料後，若您已確認啟用 **Demo/Testnet 虛擬資金**，才將 `.env` 的 `TESTNET_TRADING=true`，再執行：
+
+```powershell
+python binance_testnet_breakout.py
+```
+
+請保持電腦開機、網路連線與 PowerShell 視窗開啟約半天。程式每輪會同步交易所倉位，監控網站則會顯示最新帳戶摘要、持倉、訊號與已完成交易。請以事件與已實現損益作為驗證紀錄，**不應把短期 Testnet 結果視為未來收益保證**。
+
 ## 需要使用者明確確認後才能進行的 Testnet 動作
 
 1. 在 Binance Demo Trading 建立**專用的 Demo API Key**。

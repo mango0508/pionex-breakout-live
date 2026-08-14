@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 
 
 SAFE_TESTNET_BASE_URL = "https://demo-fapi.binance.com"
+SAFE_MONITOR_INGEST_URL = "https://pionexdash-x73yw8sp.manus.space/api/telemetry/ingest"
 DEFAULT_SYMBOL = "BTCUSDT"
 DEFAULT_INTERVAL = "5m"
 
@@ -59,6 +60,17 @@ def require_safe_testnet_base_url(base_url: str) -> str:
     return normalised
 
 
+def require_safe_monitor_ingest_url(ingest_url: str) -> str:
+    """僅允許上傳至此專案的 HTTPS 私人監控端點，避免誤將帳戶摘要送往其他服務。"""
+    normalised = ingest_url.rstrip("/")
+    if normalised != SAFE_MONITOR_INGEST_URL:
+        raise ValueError(
+            "安全停止：MONITOR_INGEST_URL 必須精確為私人監控端點 "
+            f"{SAFE_MONITOR_INGEST_URL}。"
+        )
+    return normalised
+
+
 @dataclass(frozen=True)
 class Settings:
     symbol: str
@@ -82,6 +94,10 @@ class Settings:
     api_secret: str
     state_path: Path
     log_path: Path
+    monitor_telemetry_enabled: bool
+    monitor_ingest_url: str
+    monitor_ingest_token: str
+    monitor_timeout_seconds: int
 
 
 def load_settings() -> Settings:
@@ -90,6 +106,10 @@ def load_settings() -> Settings:
     base_url = require_safe_testnet_base_url(
         os.getenv("BINANCE_TESTNET_BASE_URL", SAFE_TESTNET_BASE_URL)
     )
+    monitor_telemetry_enabled = parse_bool(os.getenv("MONITOR_TELEMETRY_ENABLED"), False)
+    monitor_ingest_url = os.getenv("MONITOR_INGEST_URL", "").strip()
+    if monitor_telemetry_enabled:
+        monitor_ingest_url = require_safe_monitor_ingest_url(monitor_ingest_url)
     return Settings(
         symbol=os.getenv("BINANCE_SYMBOL", DEFAULT_SYMBOL).upper(),
         interval=os.getenv("KLINE_INTERVAL", DEFAULT_INTERVAL),
@@ -114,6 +134,10 @@ def load_settings() -> Settings:
         api_secret=os.getenv("BINANCE_TESTNET_API_SECRET", "").strip(),
         state_path=Path(os.getenv("STATE_FILE", project_dir / "binance_testnet_state.json")),
         log_path=Path(os.getenv("EVENT_LOG_FILE", project_dir / "binance_testnet_events.csv")),
+        monitor_telemetry_enabled=monitor_telemetry_enabled,
+        monitor_ingest_url=monitor_ingest_url,
+        monitor_ingest_token=os.getenv("MONITOR_INGEST_TOKEN", "").strip(),
+        monitor_timeout_seconds=max(int(os.getenv("MONITOR_TELEMETRY_TIMEOUT_SECONDS", "10")), 3),
     )
 
 
@@ -124,12 +148,14 @@ class PositionRiskState:
     quantity: float
     protection_activated: bool = False
     lock_profit_peak_reached: bool = False
+    peak_roe_pct: float = 0.0
 
 
 @dataclass
 class BotState:
     position: PositionRiskState | None = None
     last_action: str = "START"
+    last_telemetry_action: str = ""
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "BotState":
@@ -137,6 +163,7 @@ class BotState:
         return cls(
             position=PositionRiskState(**position) if position else None,
             last_action=str(data.get("last_action", "START")),
+            last_telemetry_action=str(data.get("last_telemetry_action", "")),
         )
 
 
@@ -152,7 +179,11 @@ def load_state(path: Path) -> BotState:
 def save_state(path: Path, state: BotState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
-    payload = {"position": asdict(state.position) if state.position else None, "last_action": state.last_action}
+    payload = {
+        "position": asdict(state.position) if state.position else None,
+        "last_action": state.last_action,
+        "last_telemetry_action": state.last_telemetry_action,
+    }
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     temporary.replace(path)
 
@@ -220,6 +251,7 @@ def estimated_roe_pct(position: PositionRiskState, current_price: float, leverag
 
 def evaluate_risk(position: PositionRiskState, current_price: float, settings: Settings) -> tuple[ExitReason, float]:
     roe = estimated_roe_pct(position, current_price, settings.leverage)
+    position.peak_roe_pct = max(position.peak_roe_pct, roe)
     if roe >= settings.protection_activation_roe_pct:
         position.protection_activated = True
     if roe >= settings.lock_profit_peak_roe_pct:
@@ -513,10 +545,83 @@ def run_once(settings: Settings, state: BotState, client: BinanceTestnetClient, 
     return state
 
 
+def publish_telemetry(settings: Settings, state: BotState, client: BinanceTestnetClient, logger: logging.Logger) -> bool:
+    """上傳監控摘要；任何上傳問題都不會中斷交易／唯讀策略循環。"""
+    if not settings.monitor_telemetry_enabled:
+        return False
+    if not settings.monitor_ingest_token:
+        logger.warning("TELEMETRY_SKIPPED | 缺少 MONITOR_INGEST_TOKEN；不會上傳。")
+        return False
+    try:
+        candles = client.get_klines()
+        if candles.empty:
+            raise RuntimeError("沒有可用的已收盤 K 線")
+        current_price = float(candles.iloc[-1]["close"])
+        signal = breakout_signal(candles, settings)
+        balance = client.get_usdt_available_balance()
+        exchange_position = client.get_position()
+        positions: list[dict[str, Any]] = []
+        if exchange_position is not None:
+            exchange_state = exchange_position_to_risk_state(exchange_position)
+            managed_position = state.position if state.position else exchange_state
+            roe = estimated_roe_pct(managed_position, current_price, settings.leverage)
+            positions.append({
+                "symbol": settings.symbol,
+                "direction": managed_position.side,
+                "entryPrice": f"{managed_position.entry_price:.8f}",
+                "markPrice": f"{current_price:.8f}",
+                "roePct": f"{roe:.4f}",
+                "unrealizedPnl": f"{float(exchange_position.get('unRealizedProfit', 0)):.8f}",
+                "protectionActivated": managed_position.protection_activated,
+                "peakRoePct": f"{managed_position.peak_roe_pct:.4f}",
+                "lockProfitPeakReached": managed_position.lock_profit_peak_reached,
+                "managedByBot": state.position is not None,
+            })
+        event_changed = state.last_action != state.last_telemetry_action
+        events = []
+        if event_changed:
+            events.append({
+                "occurredAt": utc_now(),
+                "eventType": state.last_action.upper().replace("-", "_"),
+                "symbol": settings.symbol,
+                "detail": f"action={state.last_action}; signal={signal}; close={current_price:.2f}",
+                "mode": "DEMO_TESTNET",
+            })
+        payload = {
+            "reportedAt": utc_now(),
+            "mode": "DEMO_TESTNET",
+            "freeUsdt": f"{balance['available_balance']:.8f}",
+            "walletUsdt": f"{balance['wallet_balance']:.8f}",
+            "balanceAsOf": utc_now(),
+            "tradesToday": 0,
+            "lastScanAt": utc_now(),
+            "lastSignal": signal,
+            "lastAction": state.last_action,
+            "lastError": None,
+            "positions": positions,
+            "events": events,
+        }
+        response = requests.post(
+            settings.monitor_ingest_url,
+            json=payload,
+            headers={"x-monitor-ingest-token": settings.monitor_ingest_token},
+            timeout=settings.monitor_timeout_seconds,
+        )
+        response.raise_for_status()
+        if event_changed:
+            state.last_telemetry_action = state.last_action
+        logger.info("TELEMETRY_OK | snapshot uploaded without credentials")
+        return True
+    except Exception as exc:
+        logger.warning("TELEMETRY_ERROR | upload skipped safely (%s)", type(exc).__name__)
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Binance Futures Testnet BTC 5 分 K Breakout 執行器")
     parser.add_argument("--once", action="store_true", help="只執行一次市場／策略檢查")
     parser.add_argument("--preflight", action="store_true", help="只讀取 Demo/Testnet 帳戶條件；不設定槓桿或建立訂單")
+    parser.add_argument("--telemetry-smoke-test", action="store_true", help="只上傳一次去敏感化帳戶快照；不讀取策略訊號以外的市場資料、不設定槓桿且不建立訂單")
     args = parser.parse_args()
     settings = load_settings()
     logger = configure_logger(settings.log_path)
@@ -529,9 +634,15 @@ def main() -> None:
         run_preflight(settings, client, logger)
         return
     state = load_state(settings.state_path)
+    if args.telemetry_smoke_test:
+        publish_telemetry(settings, state, client, logger)
+        save_state(settings.state_path, state)
+        return
     while True:
         try:
             state = run_once(settings, state, client, logger)
+            save_state(settings.state_path, state)
+            publish_telemetry(settings, state, client, logger)
             save_state(settings.state_path, state)
         except requests.RequestException as exc:
             logger.error("NETWORK_ERROR | %s", exc)

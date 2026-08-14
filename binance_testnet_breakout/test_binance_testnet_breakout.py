@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 import unittest
 from dataclasses import replace
@@ -10,6 +11,7 @@ import pandas as pd
 
 from binance_testnet_breakout import (
     BotState,
+    SAFE_MONITOR_INGEST_URL,
     SAFE_TESTNET_BASE_URL,
     PositionRiskState,
     Settings,
@@ -19,6 +21,8 @@ from binance_testnet_breakout import (
     load_settings,
     main,
     order_quantity_for_margin,
+    publish_telemetry,
+    require_safe_monitor_ingest_url,
     require_safe_testnet_base_url,
     run_preflight,
     synchronise_exchange_position,
@@ -33,6 +37,7 @@ def settings() -> Settings:
         lock_profit_peak_roe_pct=15, lock_profit_exit_roe_pct=10, loop_seconds=10,
         testnet_trading=False, base_url=SAFE_TESTNET_BASE_URL, api_key="", api_secret="",
         state_path=Path("state.json"), log_path=Path("events.csv"),
+        monitor_telemetry_enabled=False, monitor_ingest_url="", monitor_ingest_token="", monitor_timeout_seconds=10,
     )
 
 
@@ -95,6 +100,11 @@ class TestTestnetSafety(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "安全停止"):
                 load_settings()
+
+    def test_monitoring_upload_url_is_locked_to_private_https_endpoint(self):
+        self.assertEqual(require_safe_monitor_ingest_url(SAFE_MONITOR_INGEST_URL), SAFE_MONITOR_INGEST_URL)
+        with self.assertRaisesRegex(ValueError, "安全停止"):
+            require_safe_monitor_ingest_url("https://example.com/api/telemetry/ingest")
 
     def test_main_stops_before_client_or_polling_for_legacy_endpoint(self):
         with patch.dict(
@@ -192,6 +202,24 @@ class TestTestnetSafety(unittest.TestCase):
         self.assertEqual(result.position.side, "LONG")
         self.assertEqual(result.position.quantity, 0.004)
         self.assertEqual(result.last_action, "EXCHANGE_POSITION_ADOPTED")
+
+    def test_telemetry_upload_is_redacted_and_never_raises_into_strategy(self):
+        telemetry_settings = replace(
+            settings(), testnet_trading=True, api_key="private-key", api_secret="private-secret",
+            monitor_telemetry_enabled=True, monitor_ingest_url=SAFE_MONITOR_INGEST_URL,
+            monitor_ingest_token="pairing-token",
+        )
+        client = FakePreflightClient()
+        client.get_klines = lambda: pd.DataFrame({"close": [100_000.0] * 25})
+        with patch("binance_testnet_breakout.requests.post") as post:
+            post.return_value.raise_for_status.return_value = None
+            uploaded = publish_telemetry(telemetry_settings, BotState(last_action="HOLD"), client, logging.getLogger("test_telemetry"))
+        self.assertTrue(uploaded)
+        payload = post.call_args.kwargs["json"]
+        self.assertNotIn("private-key", json.dumps(payload))
+        self.assertNotIn("private-secret", json.dumps(payload))
+        self.assertNotIn("pairing-token", json.dumps(payload))
+        self.assertEqual(post.call_args.kwargs["headers"]["x-monitor-ingest-token"], "pairing-token")
 
 
 if __name__ == "__main__":
