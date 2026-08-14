@@ -291,6 +291,23 @@ def as_decimal(value: Any, label: str) -> Decimal:
     return parsed
 
 
+def is_tradable_usdt_perp(info: dict[str, Any]) -> bool:
+    """統一驗證派網兩種已觀察到的合約類型格式。"""
+    symbol = str(info.get("symbol", "")).upper()
+    status = str(info.get("status", "")).upper()
+    quote_currency = str(info.get("quoteCurrency", "")).upper()
+    contract_type = str(info.get("contractType", "")).upper()
+    api_type = str(info.get("type", "")).upper()
+    is_perpetual = contract_type == "PERPETUAL" or api_type == "PERP"
+    return (
+        bool(symbol)
+        and status == "TRADING"
+        and quote_currency == "USDT"
+        and is_perpetual
+        and symbol.endswith("_USDT_PERP")
+    )
+
+
 def round_down_to_step(value: Decimal, step: Decimal) -> Decimal:
     if step <= 0:
         raise ValueError("交易對回傳了無效的 baseStep")
@@ -452,13 +469,7 @@ class PionexClient:
                 usdt_items += 1
             if is_perpetual:
                 perp_items += 1
-            if (
-                symbol
-                and status == "TRADING"
-                and quote_currency == "USDT"
-                and is_perpetual
-                and symbol.endswith("_USDT_PERP")
-            ):
+            if is_tradable_usdt_perp(item):
                 allowed[symbol] = item
 
         if not allowed:
@@ -877,11 +888,7 @@ def calculate_entry_size(
         )
 
     info = client.symbol_info(symbol)
-    if (
-        info.get("status") != "TRADING"
-        or info.get("contractType") != "PERPETUAL"
-        or info.get("quoteCurrency") != "USDT"
-    ):
+    if not is_tradable_usdt_perp(info):
         raise RuntimeError(f"{symbol} 不再是可交易的 USDT 永續合約。")
 
     ticker = client.book_ticker(symbol)

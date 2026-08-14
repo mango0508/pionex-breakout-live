@@ -127,6 +127,32 @@ class APIParsingAndScanningTests(unittest.TestCase):
         allowed = client.tradable_usdt_perp_symbols()
         self.assertEqual(set(allowed), {"BTC_USDT_PERP", "ETH_USDT_PERP"})
 
+    def test_entry_size_accepts_observed_type_perp_shape(self) -> None:
+        client = bot.PionexClient("", "")
+        client.symbol_info = lambda _symbol: {
+            "symbol": "BTC_USDT_PERP",
+            "status": "TRADING",
+            "quoteCurrency": "USDT",
+            "type": "PERP",
+            "baseStep": "0.001",
+            "minSizeMarket": "0.001",
+            "maxSizeMarket": "1000",
+            "minNotional": "1",
+        }
+        client.book_ticker = lambda _symbol: {"askPrice": "500", "bidPrice": "499"}
+
+        qty, reference_price, actual_notional = bot.calculate_entry_size(
+            client,
+            "BTC_USDT_PERP",
+            "LONG",
+            Decimal("50"),
+            Decimal("50"),
+        )
+
+        self.assertEqual(qty, Decimal("0.5"))
+        self.assertEqual(reference_price, Decimal("500"))
+        self.assertEqual(actual_notional, Decimal("250"))
+
 
 class SignalTests(unittest.TestCase):
     @staticmethod
