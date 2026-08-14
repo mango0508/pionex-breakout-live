@@ -49,6 +49,18 @@ class TestTestnetSafety(unittest.TestCase):
         with self.assertRaises(ValueError):
             require_safe_testnet_base_url("https://testnet.binancefuture.com")
 
+    def test_environment_template_uses_exact_safe_demo_url(self):
+        template_path = Path(__file__).with_name(".env.example")
+        template_values = {}
+        for line in template_path.read_text(encoding="utf-8").splitlines():
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                template_values[key] = value
+        self.assertEqual(
+            require_safe_testnet_base_url(template_values["BINANCE_TESTNET_BASE_URL"]),
+            SAFE_TESTNET_BASE_URL,
+        )
+
     def test_quantity_uses_margin_times_leverage_and_rounds_down(self):
         self.assertEqual(order_quantity_for_margin(50, 5, 100_000, "0.001", 0.001), 0.002)
 
