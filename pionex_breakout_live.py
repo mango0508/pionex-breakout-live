@@ -23,6 +23,7 @@ import hmac
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,14 @@ API_SECRET = os.getenv("PIONEX_API_SECRET", "").strip()
 TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").strip().lower() == "true"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+# 私人雲端監控為選配且預設停用。權杖僅用於本機向監控端驗證，絕非派網 API Key。
+# 上傳工作者與交易主迴圈分離；任何雲端、網路或監控端失敗都不可影響下單與風控。
+MONITOR_TELEMETRY_ENABLED = os.getenv("MONITOR_TELEMETRY_ENABLED", "false").strip().lower() == "true"
+MONITOR_DASHBOARD_INGEST_URL = os.getenv("MONITOR_DASHBOARD_INGEST_URL", "").strip()
+MONITOR_INGEST_TOKEN = os.getenv("MONITOR_INGEST_TOKEN", "").strip()
+MONITOR_UPLOAD_INTERVAL_SECONDS = 10
+MONITOR_BALANCE_REFRESH_SECONDS = 30
 
 
 def project_path_from_env(variable: str, default_name: str) -> Path:
@@ -127,6 +136,17 @@ class BotState:
     last_scan_epoch: int = 0
     last_entry_client_order_id: str = ""
     last_exit_client_order_id: str = ""
+
+
+@dataclass(frozen=True)
+class MonitorLoopSnapshot:
+    """傳遞給背景監控工作者的去敏感化本機快照，不保存任何 API 憑證。"""
+
+    reported_at: str
+    trades_today: int
+    last_scan_epoch: int
+    position_risk: dict[str, dict[str, Any]]
+    positions: tuple[dict[str, Any], ...]
 
 
 def load_state() -> BotState:
@@ -213,6 +233,47 @@ def log_event(event: str, detail: str, symbol: str = "", **context: Any) -> None
             writer.writeheader()
         writer.writerow(row)
     LOG.info("%s | %s | %s", event, symbol or "帳戶", detail)
+
+
+def utc_iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def taipei_event_time_to_utc_iso(value: str) -> str | None:
+    """將本機 CSV 的台北時間轉為固定 UTC 字串；不可信的舊列直接略過。"""
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TAIPEI_TZ)
+    except (TypeError, ValueError):
+        return None
+    return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def telemetry_events_from_csv(limit: int = 100) -> list[dict[str, Any]]:
+    """僅讀取事件 CSV 的固定安全欄位，永不上傳 context_json、API 憑證或原始 API 回應。"""
+    if limit < 1 or not EVENT_LOG_PATH.exists():
+        return []
+    try:
+        with EVENT_LOG_PATH.open("r", newline="", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))[-limit:]
+    except (OSError, csv.Error) as exc:
+        LOG.warning("讀取監控事件 CSV 失敗：%s", exc)
+        return []
+
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        occurred_at = taipei_event_time_to_utc_iso(str(row.get("time_taipei", "")))
+        event_type = str(row.get("event", "")).strip().upper()
+        detail = str(row.get("detail", "")).strip()
+        if occurred_at is None or not event_type.replace("_", "").isalpha() or not detail:
+            continue
+        events.append({
+            "occurredAt": occurred_at,
+            "eventType": event_type[:64],
+            "symbol": str(row.get("symbol", "")).strip()[:80] or None,
+            "detail": detail[:1500],
+            "mode": "LIVE" if str(row.get("live_trading", "")).lower() == "true" else "READ_ONLY",
+        })
+    return events
 
 
 def decimal_string(value: Decimal) -> str:
@@ -594,6 +655,133 @@ def active_positions(client: PionexClient) -> list[dict[str, Any]]:
         if size != 0:
             active.append(position)
     return active
+
+
+def telemetry_decimal(value: Any) -> str:
+    """監控欄位只接受有限的十進位數；缺值以 0 呈現而不影響實盤程式。"""
+    try:
+        return decimal_string(as_decimal(value, "監控數值"))
+    except RuntimeError:
+        return "0"
+
+
+def telemetry_position(state: MonitorLoopSnapshot, position: dict[str, Any]) -> dict[str, Any]:
+    size = telemetry_decimal(position.get("netSize", "0"))
+    try:
+        direction = "LONG" if Decimal(size) > 0 else "SHORT" if Decimal(size) < 0 else "UNKNOWN"
+    except InvalidOperation:
+        direction = "UNKNOWN"
+    key = position_state_key(position)
+    risk = state.position_risk.get(key, {})
+    try:
+        roe = decimal_string(current_roe_pct(position))
+    except RuntimeError:
+        roe = "0"
+    return {
+        "symbol": str(position.get("symbol", "UNKNOWN"))[:80],
+        "direction": direction,
+        "entryPrice": telemetry_decimal(position.get("avgPrice", "0")),
+        "markPrice": telemetry_decimal(position.get("markPrice", "0")),
+        "roePct": roe,
+        "unrealizedPnl": telemetry_decimal(position.get("unrealizedPnL", "0")),
+        "protectionActivated": bool(risk.get("protection_activated", False)),
+        "peakRoePct": telemetry_decimal(risk.get("peak_roe_pct", "0")),
+        "lockProfitPeakReached": bool(risk.get("reached_lock_profit_peak", False)),
+        "managedByBot": key in state.position_risk,
+    }
+
+
+class MonitorTelemetryReporter:
+    """監控專用背景工作者；絕不呼叫交易下單或平倉端點。"""
+
+    def __init__(self) -> None:
+        self.enabled = MONITOR_TELEMETRY_ENABLED
+        self._snapshot_lock = threading.Lock()
+        self._snapshot: MonitorLoopSnapshot | None = None
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_free_usdt: str | None = None
+        self._last_balance_refresh_epoch = 0.0
+
+    def start(self) -> None:
+        if not self.enabled:
+            LOG.info("雲端監控遙測未啟用；不會傳送任何資料。")
+            return
+        if not MONITOR_DASHBOARD_INGEST_URL.startswith("https://") or not MONITOR_INGEST_TOKEN:
+            LOG.warning("雲端監控遙測設定不完整；已停用遙測，交易與風控不受影響。")
+            self.enabled = False
+            return
+        self._thread = threading.Thread(target=self._run, name="monitor-telemetry", daemon=True)
+        self._thread.start()
+        log_event("MONITOR_TELEMETRY_START", "唯讀雲端監控遙測已啟動。")
+
+    def submit_loop_snapshot(self, state: BotState, positions: list[dict[str, Any]]) -> None:
+        if not self.enabled:
+            return
+        snapshot = MonitorLoopSnapshot(
+            reported_at=utc_iso_now(),
+            trades_today=max(0, int(state.trades_today)),
+            last_scan_epoch=max(0, int(state.last_scan_epoch)),
+            position_risk={key: dict(value) for key, value in state.position_risk.items()},
+            positions=tuple(dict(position) for position in positions),
+        )
+        with self._snapshot_lock:
+            self._snapshot = snapshot
+
+    def _current_snapshot(self) -> MonitorLoopSnapshot | None:
+        with self._snapshot_lock:
+            return self._snapshot
+
+    def _refresh_free_usdt(self, client: PionexClient) -> None:
+        now = time.monotonic()
+        if now - self._last_balance_refresh_epoch < MONITOR_BALANCE_REFRESH_SECONDS:
+            return
+        self._last_balance_refresh_epoch = now
+        try:
+            self._last_free_usdt = decimal_string(get_free_usdt(client))
+        except Exception as exc:
+            # 餘額快照失敗只保留上次成功值，絕不傳播到交易主迴圈。
+            LOG.warning("雲端監控讀取可用 USDT 失敗：%s", exc)
+
+    def _upload(self, snapshot: MonitorLoopSnapshot) -> None:
+        payload = {
+            "reportedAt": snapshot.reported_at,
+            "mode": "LIVE" if LIVE_TRADING else "READ_ONLY",
+            "freeUsdt": self._last_free_usdt,
+            "balanceAsOf": utc_iso_now() if self._last_free_usdt is not None else None,
+            "tradesToday": snapshot.trades_today,
+            "lastScanAt": (
+                datetime.fromtimestamp(snapshot.last_scan_epoch, timezone.utc)
+                .isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                if snapshot.last_scan_epoch else None
+            ),
+            "positions": [telemetry_position(snapshot, position) for position in snapshot.positions],
+            "events": telemetry_events_from_csv(),
+        }
+        try:
+            response = requests.post(
+                MONITOR_DASHBOARD_INGEST_URL,
+                json=payload,
+                headers={"X-Monitor-Ingest-Token": MONITOR_INGEST_TOKEN},
+                timeout=5,
+            )
+            if response.status_code >= 400:
+                LOG.warning("雲端監控上傳被拒絕：HTTP %s。", response.status_code)
+        except requests.RequestException as exc:
+            LOG.warning("雲端監控上傳失敗：%s", exc)
+
+    def _run(self) -> None:
+        # 使用獨立唯讀 API client，避免背景監控與交易主迴圈共用連線狀態。
+        client = PionexClient(API_KEY, API_SECRET)
+        while not self._stop_event.is_set():
+            try:
+                self._refresh_free_usdt(client)
+                snapshot = self._current_snapshot()
+                if snapshot is not None:
+                    self._upload(snapshot)
+            except Exception as exc:
+                LOG.warning("雲端監控背景工作者錯誤：%s", exc)
+            self._stop_event.wait(MONITOR_UPLOAD_INTERVAL_SECONDS)
 
 
 def current_roe_pct(position: dict[str, Any]) -> Decimal:
@@ -995,7 +1183,7 @@ def scan_for_entry(client: PionexClient, state: BotState) -> None:
     log_event("SCAN_COMPLETE", "本輪沒有可執行的突破訊號。")
 
 
-def run_once(client: PionexClient, state: BotState) -> None:
+def run_once(client: PionexClient, state: BotState) -> list[dict[str, Any]]:
     reset_daily_counter_if_needed(state)
     ensure_account_preflight(client)
 
@@ -1023,9 +1211,10 @@ def run_once(client: PionexClient, state: BotState) -> None:
                 monitor_position(client, state, position)
             except Exception as exc:
                 log_event("POSITION_MONITOR_ERROR", f"此持倉風控發生錯誤：{exc}", symbol)
-        return
+        return positions
 
     scan_for_entry(client, state)
+    return []
 
 
 def main() -> None:
@@ -1036,9 +1225,11 @@ def main() -> None:
 
     client = PionexClient(API_KEY, API_SECRET)
     state = load_state()
+    monitor_reporter = MonitorTelemetryReporter()
     log_event(
         "START",
-        "多幣 Breakout 執行器啟動；LIVE_TRADING=false 時不會送出訂單或修改槓桿。",
+        f"多幣 Breakout 執行器啟動；目前模式：{'實盤' if LIVE_TRADING else '唯讀'}。",
+        mode="LIVE" if LIVE_TRADING else "READ_ONLY",
         leverage=decimal_string(LEVERAGE),
         scan_top_n=SCAN_TOP_N,
         stop_roe_pct=decimal_string(STOP_ROE_PCT),
@@ -1053,10 +1244,12 @@ def main() -> None:
         f"設定槓桿：{LEVERAGE}x\n"
         "每日實盤開倉次數：不限制（仍維持單一活動倉位與 ROE 風控）"
     )
+    monitor_reporter.start()
 
     while True:
         try:
-            run_once(client, state)
+            positions = run_once(client, state)
+            monitor_reporter.submit_loop_snapshot(state, positions)
         except Exception as exc:
             LOG.exception("迴圈錯誤")
             log_event("ERROR", str(exc))

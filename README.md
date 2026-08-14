@@ -96,13 +96,27 @@ python pionex_breakout_live.py --telegram-test
 | `EXIT_SENT` | 實盤或唯讀模式的平倉指令／模擬平倉紀錄。 |
 | `ERROR` | 本輪流程出錯；程式會等待下一輪再重試。 |
 
-## 7. Render 部署的重要限制
+## 7. 私人雲端唯讀監控網站
+
+監控網站採「**本機機器人單向上傳已去敏感化的資料**」設計。它只傳送執行模式、可用 USDT、活動持倉摘要與事件日誌；絕不傳送 `PIONEX_API_KEY`、`PIONEX_API_SECRET`、交易簽名、Telegram Token 或原始 API 回應，也不存在下單、平倉或修改槓桿的遠端控制功能。
+
+在雲端監控網站完成發佈、並取得專屬上傳網址後，才在本機 `.env` 加入下列設定：
+
+```dotenv
+MONITOR_TELEMETRY_ENABLED=true
+MONITOR_DASHBOARD_INGEST_URL=https://你的監控網站網域/api/monitor/ingest
+MONITOR_INGEST_TOKEN=與雲端監控網站相同的長隨機權杖
+```
+
+設定後必須停止並重新啟動本機程式，才會開啟獨立的監控背景工作者。該工作者每 10 秒上傳監控快照、每 30 秒更新一次可用 USDT；任何雲端斷線、權杖錯誤或上傳失敗都只會寫入警告，**不會中斷交易主迴圈或持倉風控**。完整設定順序請閱讀 `MONITOR_DASHBOARD_SETUP.md`。
+
+## 8. Render 部署的重要限制
 
 Render 免費 Web Service 沒有持久化磁碟，重新部署或重啟後，`pionex_live_state.json` 和日誌都可能遺失。這會讓系統忘記「曾達 +15% ROE」的高水位狀態；當日開倉數雖只作統計，也會重置。因此目前 Render 免費方案只能作為 **`LIVE_TRADING=false` 的唯讀雷達**；不可作為持續實盤風控服務。
 
 在 Render 的環境變數中應個別新增 API Key、API Secret 與各設定值，**不要**上傳 `.env`。在正式實盤之前，需要先改用具持久化儲存與可靠重啟機制的環境，並完成所有離線與唯讀驗證。
 
-## 8. 可執行的離線測試
+## 9. 可執行的離線測試
 
 不需 API Key，也不會連網：
 
@@ -110,7 +124,7 @@ Render 免費 Web Service 沒有持久化磁碟，重新部署或重啟後，`pi
 python -m unittest discover -s tests -v
 ```
 
-測試覆蓋保證金階梯邊界、交易對熱門排序、槓桿解析、布林／RSI 訊號、兩段式 ROE 風控與 Telegram 通知的離線請求防護。每次修改策略後都應先執行這個命令。
+測試覆蓋保證金階梯邊界、交易對熱門排序、槓桿解析、布林／RSI 訊號、兩段式 ROE 風控、Telegram 通知與雲端遙測白名單。每次修改策略後都應先執行這個命令。
 
 ## References
 

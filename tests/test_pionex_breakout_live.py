@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import sys
 import tempfile
 import unittest
@@ -299,6 +300,84 @@ class TelegramNotificationTests(unittest.TestCase):
                 json={"chat_id": "12345", "text": "測試訊息"},
                 timeout=8,
             )
+
+
+class MonitorTelemetryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_event_log_path = bot.EVENT_LOG_PATH
+        bot.EVENT_LOG_PATH = Path(self.temp_dir.name) / "events.csv"
+
+    def tearDown(self) -> None:
+        bot.EVENT_LOG_PATH = self.original_event_log_path
+        self.temp_dir.cleanup()
+
+    def test_csv_events_are_reduced_to_the_monitoring_whitelist(self) -> None:
+        with bot.EVENT_LOG_PATH.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=["time_taipei", "event", "symbol", "detail", "live_trading", "context_json"],
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "time_taipei": "2026-08-14 16:00:40",
+                    "event": "ENTRY_BLOCKED",
+                    "symbol": "BNB_USDT_PERP",
+                    "detail": "槓桿不一致",
+                    "live_trading": "true",
+                    "context_json": '{"apiSecret":"must-not-leave-local"}',
+                }
+            )
+
+        events = bot.telemetry_events_from_csv()
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(set(events[0]), {"occurredAt", "eventType", "symbol", "detail", "mode"})
+        self.assertEqual(events[0]["eventType"], "ENTRY_BLOCKED")
+        self.assertNotIn("apiSecret", str(events))
+
+    def test_position_snapshot_and_upload_exclude_credentials(self) -> None:
+        snapshot = bot.MonitorLoopSnapshot(
+            reported_at="2026-08-14T08:00:00.000Z",
+            trades_today=2,
+            last_scan_epoch=0,
+            position_risk={"BTC_USDT_PERP:p-1": {"peak_roe_pct": "15", "protection_activated": True}},
+            positions=(
+                {
+                    "symbol": "BTC_USDT_PERP",
+                    "positionId": "p-1",
+                    "netSize": "0.01",
+                    "avgPrice": "60000",
+                    "markPrice": "61000",
+                    "initialMargin": "50",
+                    "unrealizedPnL": "5",
+                    "apiSecret": "must-not-leave-local",
+                },
+            ),
+        )
+        position = bot.telemetry_position(snapshot, dict(snapshot.positions[0]))
+        self.assertEqual(
+            set(position),
+            {
+                "symbol", "direction", "entryPrice", "markPrice", "roePct", "unrealizedPnl",
+                "protectionActivated", "peakRoePct", "lockProfitPeakReached", "managedByBot",
+            },
+        )
+
+        reporter = bot.MonitorTelemetryReporter()
+        reporter._last_free_usdt = "60"
+        with (
+            patch.object(bot, "MONITOR_DASHBOARD_INGEST_URL", "https://monitor.example/api/monitor/ingest"),
+            patch.object(bot, "MONITOR_INGEST_TOKEN", "test-monitor-token"),
+            patch.object(bot.requests, "post") as post,
+        ):
+            post.return_value.status_code = 202
+            reporter._upload(snapshot)
+
+        sent_payload = post.call_args.kwargs["json"]
+        self.assertNotIn("apiSecret", str(sent_payload))
+        self.assertEqual(post.call_args.kwargs["headers"], {"X-Monitor-Ingest-Token": "test-monitor-token"})
 
 
 if __name__ == "__main__":
