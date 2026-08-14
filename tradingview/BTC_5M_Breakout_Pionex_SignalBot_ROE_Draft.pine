@@ -1,0 +1,118 @@
+//@version=6
+//@strategy_alert_message {{strategy.order.alert_message}}
+// Draft only: no Pionex Message or Webhook URL is included in this file.
+// Use on PIONEX:BTC.PERP_USDT at 5 minutes, then validate in Strategy Tester before creating any Alert.
+strategy(
+     title = "BTC 5M Breakout — Pionex Signal Bot ROE Draft",
+     overlay = true,
+     default_qty_type = strategy.cash,
+     default_qty_value = 100,
+     initial_capital = 100,
+     pyramiding = 1,
+     margin_long = 0,
+     margin_short = 0,
+     process_orders_on_close = true,
+     calc_on_every_tick = false)
+
+// ========================== STRATEGY / INDICATOR CODE ==========================
+bbLength = input.int(20, "布林週期", minval = 2)
+bbMultiplier = input.float(2.0, "布林標準差倍數", minval = 0.1, step = 0.1)
+rsiLength = input.int(14, "RSI 週期", minval = 2)
+rsiLongMin = input.float(55.0, "RSI 做多下限", minval = 0, maxval = 100, step = 0.1)
+rsiShortMax = input.float(45.0, "RSI 做空上限", minval = 0, maxval = 100, step = 0.1)
+
+roeLeverage = input.float(5.0, "ROE 估算槓桿", minval = 1.0, step = 0.5, group = "ROE 風控")
+hardStopRoe = input.float(-8.0, "ROE 硬停損 (%)", step = 0.1, group = "ROE 風控")
+protectionActivationRoe = input.float(10.0, "ROE 第一段保護啟動 (%)", step = 0.1, group = "ROE 風控")
+protectionFloorRoe = input.float(5.0, "ROE 第一段保護線 (%)", step = 0.1, group = "ROE 風控")
+lockProfitPeakRoe = input.float(15.0, "ROE 第二段高水位 (%)", step = 0.1, group = "ROE 風控")
+lockProfitExitRoe = input.float(10.0, "ROE 第二段鎖利線 (%)", step = 0.1, group = "ROE 風控")
+
+basis = ta.sma(close, bbLength)
+deviation = bbMultiplier * ta.stdev(close, bbLength, true)
+upperBand = basis + deviation
+lowerBand = basis - deviation
+rsiValue = ta.rsi(close, rsiLength)
+
+isFiveMinute = timeframe.isminutes and timeframe.multiplier == 5
+hasIndicators = not na(upperBand) and not na(lowerBand) and not na(rsiValue)
+confirmedFiveMinuteBar = barstate.isconfirmed and isFiveMinute and hasIndicators
+longCondition = confirmedFiveMinuteBar and close > upperBand and rsiValue >= rsiLongMin
+shortCondition = confirmedFiveMinuteBar and close < lowerBand and rsiValue <= rsiShortMax
+isFlat = strategy.position_size == 0
+
+// =========================== PIONEX MESSAGE SETUP ==============================
+// Paste the listener Message into this private TradingView setting only.
+// Do not put it in this file, GitHub, chat, or a screenshot.
+jsonStringInput = input.text_area(title = "Pionex Message", defval = "", group = "Pionex Message Setup")
+var string extractedSignalType = na
+var string prevJsonStringInput = na
+inputStringChanged = jsonStringInput != prevJsonStringInput
+prevJsonStringInput := jsonStringInput
+searchKey = "\"signal_type\":\""
+searchEnd = "\""
+startIndex = str.pos(jsonStringInput, searchKey)
+if startIndex != -1
+    uuidStartPos = startIndex + str.length(searchKey)
+    remainingString = str.substring(jsonStringInput, uuidStartPos)
+    endIndexInRemaining = str.pos(remainingString, searchEnd)
+    extractedSignalType := endIndexInRemaining != -1 ? str.substring(remainingString, 0, endIndexInRemaining) : "Error: End quote not found"
+else
+    extractedSignalType := "Error: signal_type key not found"
+
+alertMessageFormat = "{\"data\":{\"action\":\"{{strategy.order.action}}\",\"contracts\":\"{{strategy.order.contracts}}\",\"position_size\":\"{{strategy.position_size}}\"},\"price\":\"{{close}}\",\"signal_param\":\"{}\",\"signal_type\":\"" + extractedSignalType + "\",\"symbol\":\"{{ticker}}\",\"time\":\"{{timenow}}\"}"
+
+// =========================== ONE POSITION ONLY ================================
+// No DCA and no reversal. A new entry is emitted only while flat.
+if isFlat
+    if longCondition
+        strategy.entry(id = "LONG", direction = strategy.long, comment = "BB+RSI long", alert_message = alertMessageFormat)
+    else if shortCondition
+        strategy.entry(id = "SHORT", direction = strategy.short, comment = "BB+RSI short", alert_message = alertMessageFormat)
+
+// ============================= ROE EXIT LOGIC =================================
+// This is a 5-minute close-based estimate, not Pionex's live initial-margin ROE.
+var bool protectionActivated = false
+var bool lockProfitPeakReached = false
+var string lastExitReason = ""
+
+if strategy.position_size == 0
+    protectionActivated := false
+    lockProfitPeakReached := false
+    lastExitReason := ""
+
+float estimatedRoe = na
+if strategy.position_size > 0
+    estimatedRoe := (close / strategy.position_avg_price - 1.0) * 100.0 * roeLeverage
+else if strategy.position_size < 0
+    estimatedRoe := (strategy.position_avg_price / close - 1.0) * 100.0 * roeLeverage
+
+if confirmedFiveMinuteBar and strategy.position_size != 0 and not na(estimatedRoe)
+    if estimatedRoe >= protectionActivationRoe
+        protectionActivated := true
+    if estimatedRoe >= lockProfitPeakRoe
+        lockProfitPeakReached := true
+
+    hardStopTriggered = estimatedRoe <= hardStopRoe
+    lockProfitTriggered = lockProfitPeakReached and estimatedRoe <= lockProfitExitRoe
+    protectionTriggered = protectionActivated and estimatedRoe <= protectionFloorRoe
+
+    if hardStopTriggered
+        lastExitReason := "ROE hard stop"
+        strategy.close_all(comment = lastExitReason, alert_message = alertMessageFormat)
+    else if lockProfitTriggered
+        lastExitReason := "ROE lock profit"
+        strategy.close_all(comment = lastExitReason, alert_message = alertMessageFormat)
+    else if protectionTriggered
+        lastExitReason := "ROE protection floor"
+        strategy.close_all(comment = lastExitReason, alert_message = alertMessageFormat)
+
+// =============================== VISUAL CHECKS =================================
+plot(basis, "布林中軌", color = color.new(color.gray, 0))
+upperPlot = plot(upperBand, "布林上軌", color = color.new(color.teal, 0))
+lowerPlot = plot(lowerBand, "布林下軌", color = color.new(color.orange, 0))
+fill(upperPlot, lowerPlot, color = color.new(color.gray, 92), title = "布林區間")
+plotshape(longCondition and isFlat, title = "LONG 訊號", text = "LONG", style = shape.labelup, location = location.belowbar, color = color.new(color.teal, 0), textcolor = color.white, size = size.tiny)
+plotshape(shortCondition and isFlat, title = "SHORT 訊號", text = "SHORT", style = shape.labeldown, location = location.abovebar, color = color.new(color.orange, 0), textcolor = color.white, size = size.tiny)
+plot(estimatedRoe, "收線 ROE 估算 (%)", color = color.new(color.fuchsia, 0), display = display.data_window)
+bgcolor(not isFiveMinute ? color.new(color.red, 88) : na, title = "非 5 分鐘圖表警示")
