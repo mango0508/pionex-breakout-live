@@ -6,8 +6,6 @@ strategy(
      overlay = true,
      pyramiding = 0,
      initial_capital = 1000,
-     default_qty_type = strategy.fixed,
-     default_qty_value = 1,
      commission_type = strategy.commission.percent,
      commission_value = 0,
      process_orders_on_close = true,
@@ -19,6 +17,10 @@ bbMultiplier = input.float(2.0, "布林標準差倍數", minval = 0.1, step = 0.
 rsiLength = input.int(14, "RSI 週期", minval = 2)
 rsiLongMin = input.float(55.0, "RSI 做多下限", minval = 0, maxval = 100, step = 0.1)
 rsiShortMax = input.float(45.0, "RSI 做空上限", minval = 0, maxval = 100, step = 0.1)
+
+// 只供回測的名義部位。以 BTC 數量送入 strategy.entry，避免原本 1 BTC 固定數量
+// 在 1,000 USDT 驗證資金下因資金不足而無法登錄任何交易。
+validationNotionalUsdt = input.float(50.0, "回測名義部位 (USDT)", minval = 1.0, step = 1.0)
 
 // 這是圖表回測的 ROE 估算槓桿，並不會修改派網或 TradingView 的實際槓桿。
 roeLeverage = input.float(5.0, "ROE 估算槓桿", minval = 1.0, step = 0.5)
@@ -86,9 +88,9 @@ if confirmedFiveMinuteBar and strategy.position_size != 0 and not na(estimatedRo
 // 同一時間只允許一筆策略持倉；本階段沒有 alert、webhook 或實盤交易設定。
 if confirmedFiveMinuteBar and strategy.position_size == 0
     if longSignal
-        strategy.entry("LONG", strategy.long, comment = "BB+RSI long")
+        strategy.entry("LONG", strategy.long, qty = validationNotionalUsdt / close, comment = "BB+RSI long")
     else if shortSignal
-        strategy.entry("SHORT", strategy.short, comment = "BB+RSI short")
+        strategy.entry("SHORT", strategy.short, qty = validationNotionalUsdt / close, comment = "BB+RSI short")
 
 // === 可視化：協助人工逐筆核對，並不傳送外部訊號 ===
 plot(basis, "布林中軌", color = color.new(color.gray, 0))
